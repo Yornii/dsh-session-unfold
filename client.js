@@ -111,6 +111,102 @@ window.__ModuleLoader__.load({
       return out.trim()
     }
 
+    // ── ask_user_question: the assistant's clarifying question ──
+    // DSH keeps these out of `assistant/message`: the tool call carries the
+    // questions and the paired tool result carries the answers. The board folds
+    // both back into the timeline so a card never shows an answer-less jump.
+    const QUESTION_TOOL = 'ask_user_question'
+
+    function jsonObjectOf(text) {
+      if (typeof text !== 'string' || text === '') return null
+      try {
+        const value = JSON.parse(text)
+        return value !== null && typeof value === 'object' && !Array.isArray(value) ? value : null
+      } catch (_error) {
+        return null
+      }
+    }
+
+    function questionsOf(value) {
+      if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
+      if (!Array.isArray(value.questions)) return null
+      const questions = []
+      for (const raw of value.questions) {
+        if (raw === null || typeof raw !== 'object') continue
+        if (typeof raw.question !== 'string' || raw.question.trim() === '') continue
+        const options = []
+        if (Array.isArray(raw.options)) {
+          for (const option of raw.options) {
+            if (option === null || typeof option !== 'object') continue
+            if (typeof option.label !== 'string' || option.label === '') continue
+            options.push({
+              label: option.label,
+              description: typeof option.description === 'string' ? option.description : '',
+            })
+          }
+        }
+        questions.push({
+          id: typeof raw.id === 'string' ? raw.id : '',
+          header: typeof raw.header === 'string' ? raw.header : '',
+          question: raw.question.trim(),
+          options,
+        })
+      }
+      return questions.length === 0 ? null : questions
+    }
+
+    function answersOf(text) {
+      const value = jsonObjectOf(text)
+      if (value === null || !Array.isArray(value.answers)) return null
+      const answers = []
+      for (const raw of value.answers) {
+        if (raw === null || typeof raw !== 'object' || typeof raw.id !== 'string') continue
+        answers.push({
+          id: raw.id,
+          selected: Array.isArray(raw.selected)
+            ? raw.selected.filter(item => typeof item === 'string' && item !== '')
+            : [],
+          custom: typeof raw.custom === 'string' ? raw.custom : '',
+        })
+      }
+      return answers.length === 0 ? null : answers
+    }
+
+    /** Markdown text of a batch of questions: header, body, and option labels. */
+    function questionText(questions) {
+      const blocks = []
+      for (const question of questions) {
+        const lines = []
+        if (question.header !== '' && question.header !== question.question) lines.push(`**${question.header}**`)
+        lines.push(question.question)
+        for (const option of question.options) {
+          lines.push(option.description === ''
+            ? `- ${option.label}`
+            : `- ${option.label} — ${option.description}`)
+        }
+        blocks.push(lines.join('\n'))
+      }
+      return blocks.join('\n\n')
+    }
+
+    /** The user's answer, one line per question, with the skipped ones spelled out. */
+    function answerText(item, t) {
+      const byId = new Map(item.answers.map(answer => [answer.id, answer]))
+      const lines = []
+      for (const question of item.questions) {
+        const answer = byId.get(question.id)
+        const values = []
+        if (answer !== undefined) {
+          values.push(...answer.selected)
+          if (answer.custom !== '') values.push(answer.custom)
+        }
+        const value = values.length === 0 ? t('clarifySkipped') : values.join(', ')
+        const label = question.header !== '' && question.header !== question.question ? question.header : ''
+        lines.push(label === '' ? value : t('clarifyAnswerLine', { label, answer: value }))
+      }
+      return lines.join('\n')
+    }
+
     // ── compact, safe Markdown for assistant replies ──
     let markdownKey = 0
     function nextMarkdownKey(prefix) {
@@ -307,7 +403,8 @@ window.__ModuleLoader__.load({
 
     /**
      * Fold the loaded event window into the card timeline: user messages and
-     * assistant replies. Tool calls are intentionally hidden on the board.
+     * assistant replies, plus the assistant's `ask_user_question` clarifications
+     * and the user's answers to them. Other tool calls stay hidden on the board.
      * Older pages are prepended by the Session controller when the user asks for
      * history, and `hasMore` tells the card whether another page exists.
      * @param entries - contiguous Client event window of one Session.
@@ -315,6 +412,8 @@ window.__ModuleLoader__.load({
     function summarize(entries) {
       const items = []
       let turnStart = 0
+      // callId -> the question item waiting for its tool result.
+      const pending = new Map()
       for (let i = 0; i < entries.length; i += 1) {
         const entry = entries[i]
         if (entry.type === 'transient') continue
@@ -338,6 +437,39 @@ window.__ModuleLoader__.load({
           if (text !== '') {
             items.push({ kind: 'assistant', text, time: event.time || 0 })
           }
+        } else if (event.type === 'tool/call') {
+          const data = event.data || {}
+          if (data.name !== QUESTION_TOOL) continue
+          const args = typeof data.arguments === 'string' ? jsonObjectOf(data.arguments) : data.arguments
+          const questions = questionsOf(args)
+          if (questions === null) continue
+          const item = {
+            kind: 'assistant',
+            clarify: true,
+            questions,
+            text: questionText(questions),
+            time: event.time || 0,
+          }
+          items.push(item)
+          if (typeof data.callId === 'string' && data.callId !== '') pending.set(data.callId, item)
+        } else if (event.type === 'tool/result') {
+          const data = event.data || {}
+          const message = data.message || {}
+          const callId = typeof data.toolCallId === 'string'
+            ? data.toolCallId
+            : typeof message.toolCallId === 'string' ? message.toolCallId : ''
+          const question = pending.get(callId)
+          if (question === undefined || message.isError === true) continue
+          pending.delete(callId)
+          const answers = answersOf(textOf(message.content ?? data.content))
+          if (answers === null) continue
+          items.push({
+            kind: 'user',
+            clarify: true,
+            answers,
+            questions: question.questions,
+            time: event.time || 0,
+          })
         }
       }
       return {
@@ -903,7 +1035,7 @@ window.__ModuleLoader__.load({
             key: `user-${index}-${item.time}`,
             className: `dshtb-bubble dshtb-bubbleUser${doing ? ' dshtb-bubbleDoing' : ''}`,
             title,
-          }, item.text)
+          }, item.clarify === true ? answerText(item, t) : item.text)
         }
         return h('div', {
           key: `assistant-${index}-${item.time}`,
@@ -1757,6 +1889,9 @@ window.__ModuleLoader__.load({
 
     return {
       inject: ['slots', 'locale', 'sessions', 'uiWorkspace', 'remote', 'remote.commands'],
+      // Offline render harness seam (tools/render-test.mjs); the Host only uses
+      // `inject` and `apply`.
+      __test: { summarize, questionText, answerText, MarkdownText },
       apply(ctx) {
         ctx.effect(() => ctx.locale.register(NS, {
           zh: {
@@ -1803,6 +1938,8 @@ window.__ModuleLoader__.load({
             messageFilter: '消息显示范围',
             allMessages: '全部',
             userOnly: '仅用户',
+            clarifySkipped: '已跳过',
+            clarifyAnswerLine: '{label}：{answer}',
             tool: '工具',
             approvalWaiting: '等待权限审批：{tool}',
             allowOnce: '允许一次',
@@ -1876,6 +2013,8 @@ window.__ModuleLoader__.load({
             messageFilter: 'Message display',
             allMessages: 'All',
             userOnly: 'User only',
+            clarifySkipped: 'Skipped',
+            clarifyAnswerLine: '{label}: {answer}',
             tool: 'tool',
             approvalWaiting: 'Waiting for permission: {tool}',
             allowOnce: 'Allow once',
