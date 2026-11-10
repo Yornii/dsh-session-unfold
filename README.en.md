@@ -1,4 +1,6 @@
-# dsh-session-unfold
+<p align="center">
+  <img src="https://raw.githubusercontent.com/yornii/dsh-session-unfold/main/assets/social-preview.png" alt="dsh-session-unfold — Unfold your sessions. See the whole flow.">
+</p>
 
 A client-side plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) that replaces the sidebar's flat session list with a full-screen session tiling view: one card per session, each card a live mini conversation you can read and reply to without leaving the view.
 
