@@ -1,0 +1,56 @@
+{
+  "name": "@yornii/dsh-session-unfold",
+  "version": "0.11.2",
+  "description": "Session tiling for DeepSeek Harness: one card per Session with user and Markdown assistant messages, sidebar-consistent pinning, an optional read-only subagent window toggle, inline new-window creation, snapping cards and batch deletion (which runs through the separate session-delete plugin).",
+  "license": "MIT",
+  "author": "Yornii",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yornii/dsh-session-unfold.git"
+  },
+  "homepage": "https://github.com/yornii/dsh-session-unfold",
+  "bugs": {
+    "url": "https://github.com/yornii/dsh-session-unfold/issues"
+  },
+  "keywords": [
+    "deepseek",
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "session-unfold",
+    "task-board",
+    "session-dashboard"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg"
+  ],
+  "scripts": {
+    "check": "node --check client.js && node tools/render-test.mjs"
+  },
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-workspace",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-api-session-controller",
+        "@deepseek-ai/dsh-api-remotes"
+      ]
+    }
+  }
+}

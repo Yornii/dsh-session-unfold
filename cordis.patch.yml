@@ -1,0 +1,5 @@
+# Session unfold bundle: the Host half is an empty shell; the Client module
+# renders the sidebar launcher and the full-screen board of resizable cards.
+- insert:
+    - id: session-unfold
+      name: '@yornii/dsh-session-unfold'
