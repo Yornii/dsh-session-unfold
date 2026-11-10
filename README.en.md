@@ -15,6 +15,7 @@ The default session list gives you a title and a timestamp. With dozens of runni
 | Full-screen board | Opened from the sidebar footer button, fills the window, closes with Esc or ✕ |
 | New window | The header "New window" button creates a Session in the current/recent Workspace and adds its card to the board. The board stays open, with one window per Session |
 | Conversation timeline | Each card shows user messages and Markdown-rendered assistant replies; tool calls stay hidden. The All / User only toggle at the top can show only user messages |
+| Clarifying questions | Questions the assistant asks with `ask_user_question` appear as assistant messages (question text and option descriptions), and the user's selection follows as a user message; skipped questions say "Skipped". Question and answer are paired by tool-call id, so nothing duplicates or drifts out of order |
 | In-progress highlight | When a card's status is "In progress", its last user-message bubble is green |
 | Approval sync | A pending permission approval shows the tool and reason on the card with direct "Allow once" and "Reject" buttons; it clears when the approval settles |
 | History | A "Load earlier messages" button pages backwards through the Session event window and prepends older messages |
@@ -73,6 +74,7 @@ Status is read-only: running work is "In progress"; a just-finished non-main Ses
 - New window calls `ctx.sessions.create({ workspaceId })`, the same Host `session/create` endpoint behind the sidebar's New session, then adds the returned Session id to the board. It never calls the navigating `uiWorkspace.startSession()`, so the board stays open. Workspace choice mirrors New session: the main view's Session Workspace, then the most recently active Workspace. The button is gated by `useRemoteAccess('session/create')`
 - Each card calls `ctx.sessions.retain(sessionId, { source: 'taskBoard' })` to read that session's recent event window, re-folds it on every change, and releases the reference on unmount
 - Cards fold `user/message` and `assistant/message` into one timeline; assistant replies render through a safe built-in Markdown subset (headings, bold, italic, inline code, code blocks, lists, tables, quotes, links). Tool calls stay off the card. The All / User only toggle filters the view without changing the underlying event window. Card sizes are changed with Pointer Events, snap to other cards, and are stored in localStorage
+- `ask_user_question` is not part of `assistant/message`: the questions live in `tool/call`'s `arguments.questions` and the answers in the `tool/result` with the same `callId`. Folding renders the questions as one assistant bubble (bold header, question body, option descriptions as a list) and then appends a user bubble from the paired result (one line per question, `header: answer`, with "Skipped" for empty selections). A question without a result renders alone, and an errored result produces no answer bubble. Other tool calls remain hidden
 - Window pinning reads `useWorkspaces().pinnedSessionIds` and sorts those cards first in that exact order; the card button calls `uiWorkspace.pinSession` / `unpinSession`, so the sidebar and board share one pin state and order
 - Subagent windows come from `useSessions().byId` rows with `origin === 'subagent'`; the header toggle controls whether they join the card list, and they stay hidden by default. Subagent cards are pure read-only views: no composer, title editor, pin, approval buttons, batch checkbox or Open session button
 - History uses `binding.session.loadOlder()`: it prepends one page (at least 50 messages and two turns) to the current event window, and `eventSource.hasMore` controls the "Load earlier messages" affordance
@@ -103,6 +105,7 @@ node tools/render-test.mjs
 - DSH itself has no permanent-delete endpoint; batch deletion here runs the `delete-session` command from `session-delete`, so deletion fails when that plugin is disabled. Deleted sessions cannot be restored from the archive
 - Draft sync carries text only; the card has no reference chips or attachment previews, so editing there degrades those rich spans to plain text
 - The approval banner covers approval interactions only; plan reviews, questions, and other pending interactions still require opening the session
+- Clarifying questions pair question and answer by tool-call id: in timed mode a late answer arrives as a `user-question-reply` user message, so the card shows the question without that late answer. If paging splits a question from its result, "Load earlier messages" is needed to reveal the answer
 - The board initially shows 12 cards; more tasks page in through the "show more" button (no virtual scrolling yet)
 
 ## License

@@ -47,6 +47,20 @@ new Function('module', 'exports', source.replace('let isOpen = false', 'let isOp
 
 // ---- synthetic host: sessions with an event window per session ----
 const now = Date.now()
+// One clarification exchange: the assistant asks two questions, answers one and
+// skips the other. A second, still-pending question proves the question bubble
+// does not depend on a tool result.
+const clarifyEntries = () => [
+  { type: 'event', event: { type: 'tool/call', time: now - 4500, data: { name: 'ask_user_question', callId: 'call_q1', arguments: JSON.stringify({ questions: [
+    { id: 'when', header: '发布窗口', question: '什么时候发？', options: [{ label: '今晚', description: '低峰期' }, { label: '明早' }] },
+    { id: 'scope', header: '范围', question: '要带哪些改动？' },
+  ] }) } } },
+  { type: 'event', event: { type: 'tool/result', time: now - 4400, data: { toolCallId: 'call_q1', message: { role: 'tool', toolCallId: 'call_q1', isError: false, content: [{ type: 'text', text: JSON.stringify({ answers: [{ id: 'when', selected: ['今晚'] }, { id: 'scope', selected: [] }] }) }] } } } },
+  { type: 'event', event: { type: 'assistant/message', time: now - 4300, data: { message: { content: [{ type: 'text', text: '好，今晚发。' }] } } } },
+]
+const pendingEntries = () => [
+  { type: 'event', event: { type: 'tool/call', time: now - 1000, data: { name: 'ask_user_question', callId: 'call_q2', arguments: JSON.stringify({ questions: [{ id: 'check', header: '确认', question: '要跑权限检查吗？', options: [{ label: '跑' }, { label: '不跑' }] }] }) } } },
+]
 const mkEntries = (title, running) => {
   const entries = [
     { type: 'event', event: { type: 'user/message', time: now - 9000, data: { source: { kind: 'user' }, content: [{ type: 'text', text: `帮我看下 ${title}` }] } } },
@@ -55,6 +69,8 @@ const mkEntries = (title, running) => {
     { type: 'event', event: { type: 'tool/call', time: now - 6000, data: { name: 'bash' } } },
     { type: 'event', event: { type: 'assistant/message', time: now - 5000, data: { message: { content: [{ type: 'text', text: `## 结论\n\n**${title}** 已处理完，无异常\n\n- \`ok\`` }] } } } },
   ]
+  if (title === 'Draft release notes') entries.push(...clarifyEntries())
+  if (running) entries.push(...pendingEntries())
   if (!running) entries.push({ type: 'event', event: { type: 'turn/end', time: now - 4000, data: { reason: { kind: 'completed' } } } })
   return entries
 }
@@ -138,6 +154,7 @@ const t = (key, params) => {
   creatingWindow: 'Creating…', newWindowNoWorkspace: 'No workspace', newWindowFailed: 'Failed: {message}',
   openSession: 'Open session', editTitle: 'Edit title', renameFailed: 'Rename failed',
     selectWindow: 'Select window', messageFilter: 'Message display', allMessages: 'All', userOnly: 'User only',
+    clarifySkipped: 'Skipped', clarifyAnswerLine: '{label}: {answer}',
     tool: 'tool', approvalWaiting: 'Waiting: {tool}',
     allowOnce: 'Allow once', reject: 'Reject', approvalFailed: 'Approval failed',
     noSessions: 'No tasks', noMatch: 'No matches', loadingCard: 'Loading…', loadFailed: 'Load failed',
@@ -194,6 +211,21 @@ console.log('HAS_GREEN_BUBBLE_CSS:', boardHtml.includes('dshtb-bubbleDoing'))
 console.log('HAS_STATUS_LABEL:', (boardHtml.match(/dshtb-stateLabel/g) || []).length)
 console.log('HAS_AUTO_DONE:', boardHtml.includes('data-status="done"'))
 
+// ---- clarification folding (questions live in tool/call, answers in tool/result) ----
+// The board body fills from `useEffect`, which static rendering skips, so the
+// timeline is asserted against the module's own folding seam instead.
+const { summarize, answerText, MarkdownText } = value.__test
+const folded = summarize(windows.get('c'))
+const questionItem = folded.items.find(item => item.clarify === true && item.kind === 'assistant')
+const answerItem = folded.items.find(item => item.clarify === true && item.kind === 'user')
+const questionHtml = questionItem === undefined
+  ? ''
+  : renderToStaticMarkup(React.createElement(MarkdownText, { text: questionItem.text }))
+const answer = answerItem === undefined ? '' : answerText(answerItem, t)
+const pendingFolded = summarize(windows.get('a'))
+console.log('CLARIFY_QUESTION_HTML:', questionHtml)
+console.log('CLARIFY_ANSWER:', JSON.stringify(answer))
+
 // Simulate opening: the launcher's onClick calls setOpen(true); invoke it through
 // React's props by rendering with a synthetic event is not needed — instead use
 // the module's exported behaviour: dispatch a click on a mounted tree is DOM-only.
@@ -204,7 +236,18 @@ if (!launcherHtml.includes('dshtb-launch')) failures.push('launcher button missi
 if (!boardHtml.includes('dshtb-card')) failures.push('board did not render')
 if (cards !== 5) failures.push(`expected 5 cards, got ${cards}`)
 if (!source.includes("assistant/message")) failures.push('assistant messages are not projected')
-if (source.includes("tool/call")) failures.push('tool calls should be hidden')
+if (questionItem === undefined
+  || !questionItem.text.includes('什么时候发？')
+  || !questionItem.text.includes('- 今晚 — 低峰期')) failures.push('clarifying question is not folded as an assistant message')
+if (!questionHtml.includes('<strong>发布窗口</strong>') || !questionHtml.includes('<li>今晚')) failures.push('clarifying question does not render as Markdown')
+if (answer !== '发布窗口: 今晚\n范围: Skipped') failures.push(`clarification answer is wrong: ${JSON.stringify(answer)}`)
+const questionIndex = folded.items.indexOf(questionItem)
+const answerIndex = folded.items.indexOf(answerItem)
+if (questionItem === undefined || answerItem === undefined || questionIndex > answerIndex) failures.push('clarification answer does not follow its question')
+if (!pendingFolded.items.some(item => item.clarify === true && item.kind === 'assistant' && item.text.includes('要跑权限检查吗？'))) failures.push('pending clarifying question is not folded')
+if (pendingFolded.items.some(item => item.clarify === true && item.kind === 'user')) failures.push('unanswered question produced an answer bubble')
+if (!source.includes('__test')) failures.push('folding seam missing')
+if (!source.includes("const QUESTION_TOOL = 'ask_user_question'")) failures.push('clarifying question tool is not recognized')
 if (order[0] !== 'Investigate p99 latency') failures.push(`pinned task should sort first, got ${order[0]}`)
 if (!boardHtml.includes('dshtb-cardWrap')) failures.push('resizable card wrapper missing')
 if (!boardHtml.includes('dshtb-resize')) failures.push('card resize handle missing')
