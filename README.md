@@ -1,8 +1,6 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/yornii/dsh-session-unfold/main/assets/icon-180.png" width="96" alt="Session unfold">
+  <img src="https://raw.githubusercontent.com/yornii/dsh-session-unfold/main/assets/social-preview.png" alt="dsh-session-unfold — Unfold your sessions. See the whole flow.">
 </p>
-
-# dsh-session-unfold
 
 一个 DeepSeek Harness（DSH）Web 客户端插件：把侧边栏那份「一列标题 + 几天前」的会话列表，换成一个全屏的会话平铺视图——每个会话一张卡片，卡片里是这个会话最近几条消息，状态一眼可见，点一下直接进去。
 
