@@ -1,7 +1,7 @@
 {
   "name": "@yornii/dsh-session-unfold",
-  "version": "0.12.0",
-  "description": "Session tiling for DeepSeek Harness: one card per Session with user and Markdown assistant messages, assistant clarifying questions with the user's answers, sidebar-consistent pinning, an optional read-only subagent window toggle, inline new-window creation, snapping cards and batch deletion (which runs through the separate session-delete plugin).",
+  "version": "0.13.0",
+  "description": "Session tiling for DeepSeek Harness: one card per Session with user and Markdown assistant messages, assistant clarifying questions with the user's answers, drag-and-drop file uploads into a Session's draft, sidebar-consistent pinning, an optional read-only subagent window toggle, inline new-window creation, snapping cards and batch deletion (which runs through the separate session-delete plugin).",
   "license": "MIT",
   "author": "Yornii",
   "repository": {
