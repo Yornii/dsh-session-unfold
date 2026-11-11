@@ -34,6 +34,20 @@
 | 余额显示 | 顶栏显示当前账户余额（`¥` / `$`，含赠送提示），打开大屏时读取并每分钟刷新；未登录或无权限时自动隐藏 |
 | 其他 | 历史消息分页、搜索、状态筛选、工作区标签、运行中徽标、中英双语 |
 
+## 🖼️ 界面
+
+左下角的「任务大屏」入口：
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Yornii/dsh-session-unfold/main/assets/task-board-entry.png" alt="侧边栏左下角的任务大屏入口">
+</p>
+
+打开后所有会话铺成一张大屏：一个会话一张卡片，最近消息、状态与待处理提问都在卡片上：
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Yornii/dsh-session-unfold/main/assets/task-board.png" alt="任务大屏">
+</p>
+
 ## 📦 安装
 
 ```sh

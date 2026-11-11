@@ -33,6 +33,20 @@ The session list gives only a title and a timestamp. With many tasks you cannot 
 | Permanent batch delete | Multi-select deletes windows and Sessions after a second confirmation (needs `dsh-session-delete`) |
 | Extras | History paging, search, status filter, workspace chip, running badge, en / zh UI |
 
+## 🖼️ Screenshots
+
+The Task board entry sits at the bottom of the sidebar:
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Yornii/dsh-session-unfold/main/assets/task-board-entry.png" alt="Task board entry at the bottom of the sidebar">
+</p>
+
+Opening it lays every Session out on one screen — one card each, with its latest messages, status and pending questions:
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Yornii/dsh-session-unfold/main/assets/task-board.png" alt="Task board">
+</p>
+
 ## 📦 Install
 
 ```sh
