@@ -8,7 +8,7 @@
  * projection is declared: the board only presents already-committed events.
  */
 window.__ModuleLoader__.load({
-  id: '@yornii/dsh-session-unfold',
+  id: '@yornni/dsh-session-unfold',
   factory(require) {
     const React = require('react')
     const h = React.createElement

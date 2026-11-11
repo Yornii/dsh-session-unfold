@@ -51,7 +51,7 @@
 ## 📦 安装
 
 ```sh
-dsh plugin --profile web add @yornii/dsh-session-unfold
+dsh plugin --profile web add @yornni/dsh-session-unfold
 ```
 
 未发布 npm 时改用 `dsh plugin --profile web add github:yornii/dsh-session-unfold`；也可以克隆仓库，在插件管理器里安装含 `package.json` 的目录。安装后刷新页面，左下角出现「任务大屏」；卸载即移除本插件，不改动 DSH 的任何原有文件。永久删除还需要启用提供 `delete-session` 命令的 `dsh-session-delete` 插件。

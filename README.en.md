@@ -50,7 +50,7 @@ Opening it lays every Session out on one screen — one card each, with its late
 ## 📦 Install
 
 ```sh
-dsh plugin --profile web add @yornii/dsh-session-unfold
+dsh plugin --profile web add @yornni/dsh-session-unfold
 ```
 
 Until it is on npm, use `dsh plugin --profile web add github:yornii/dsh-session-unfold`, or clone the repository and install the directory containing `package.json` through the plugin manager. After installing, reload the page and a "Task board" button appears at the bottom of the sidebar; uninstalling removes only this plugin and leaves DSH files untouched. Permanent deletion also needs the `dsh-session-delete` plugin that provides `delete-session`.

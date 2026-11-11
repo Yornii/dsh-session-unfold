@@ -2,4 +2,4 @@
 # renders the sidebar launcher and the full-screen board of resizable cards.
 - insert:
     - id: session-unfold
-      name: '@yornii/dsh-session-unfold'
+      name: '@yornni/dsh-session-unfold'
