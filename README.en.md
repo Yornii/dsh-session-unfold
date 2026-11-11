@@ -2,6 +2,12 @@
   <img src="https://raw.githubusercontent.com/yornii/dsh-session-unfold/main/assets/social-preview.png" alt="dsh-session-unfold — Unfold your sessions. See the whole flow.">
 </p>
 
+<p align="center">
+  <a href="https://github.com/Yornii/dsh-session-unfold/actions/workflows/ci.yml"><img src="https://github.com/Yornii/dsh-session-unfold/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/Yornii/dsh-session-unfold/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-d63a52" alt="MIT"></a>
+  <a href="https://github.com/Yornii/dsh-session-unfold"><img src="https://img.shields.io/badge/DSH-plugin-0b7285" alt="DSH plugin"></a>
+</p>
+
 A client-side plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) that turns the sidebar's session list into a full-screen tiling view: one card per session, latest messages at a glance, one click to open.
 
 > 中文说明见 [README.md](README.md).
@@ -24,7 +30,7 @@ The session list gives only a title and a timestamp. With many tasks you cannot 
 | Inline reply | Shares the real session draft; Enter sends, Shift+Enter adds a line |
 | Drag-and-drop upload | Drop files onto any writable card to upload them into that Session's draft attachments, shared with the real composer; the card shows upload status and attachment count, and Enter sends them together |
 | Approvals | A pending approval shows the tool and reason with Allow once / Reject |
-| Permanent batch delete | Multi-select deletes windows and Sessions after a second confirmation (needs `session-delete`) |
+| Permanent batch delete | Multi-select deletes windows and Sessions after a second confirmation (needs `dsh-session-delete`) |
 | Extras | History paging, search, status filter, workspace chip, running badge, en / zh UI |
 
 ## 📦 Install
@@ -33,7 +39,7 @@ The session list gives only a title and a timestamp. With many tasks you cannot 
 dsh plugin --profile web add @yornii/dsh-session-unfold
 ```
 
-Until it is on npm, use `dsh plugin --profile web add github:yornii/dsh-session-unfold`, or clone the repository and install the directory containing `package.json` through the plugin manager. After installing, reload the page and a "Task board" button appears at the bottom of the sidebar; uninstalling removes only this plugin and leaves DSH files untouched. Permanent deletion also needs the `session-delete` plugin that provides `delete-session`.
+Until it is on npm, use `dsh plugin --profile web add github:yornii/dsh-session-unfold`, or clone the repository and install the directory containing `package.json` through the plugin manager. After installing, reload the page and a "Task board" button appears at the bottom of the sidebar; uninstalling removes only this plugin and leaves DSH files untouched. Permanent deletion also needs the `dsh-session-delete` plugin that provides `delete-session`.
 
 ## ⚙️ Configuration
 
@@ -62,7 +68,7 @@ node tools/render-test.mjs
 
 - Status and card sizes live in the local browser only; they do not sync across machines.
 - Live updates, navigation and size persistence need a running Web page; the offline test does not cover them.
-- Permanent deletion needs `session-delete`; deleted Sessions cannot be restored from the archive.
+- Permanent deletion needs `dsh-session-delete`; deleted Sessions cannot be restored from the archive.
 - Draft sync is text-only; reference chips and attachment previews degrade to plain text when edited from a card.
 - Dropped files share the real composer's draft attachments; the card shows only the count, while previews and removal stay in the session composer.
 - The approval banner covers approvals only; plan reviews, questions and other pending interactions still need the session.

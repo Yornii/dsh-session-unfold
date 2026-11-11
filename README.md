@@ -2,6 +2,12 @@
   <img src="https://raw.githubusercontent.com/yornii/dsh-session-unfold/main/assets/social-preview.png" alt="dsh-session-unfold — Unfold your sessions. See the whole flow.">
 </p>
 
+<p align="center">
+  <a href="https://github.com/Yornii/dsh-session-unfold/actions/workflows/ci.yml"><img src="https://github.com/Yornii/dsh-session-unfold/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/Yornii/dsh-session-unfold/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-d63a52" alt="MIT"></a>
+  <a href="https://github.com/Yornii/dsh-session-unfold"><img src="https://img.shields.io/badge/DSH-plugin-0b7285" alt="DSH plugin"></a>
+</p>
+
 一个 DeepSeek Harness（DSH）Web 客户端插件：把侧边栏的会话列表换成全屏平铺视图，一个会话一张卡片，最近消息一目了然，点开即进。
 
 > English: [README.en.md](README.en.md)
@@ -24,7 +30,7 @@
 | 内联回复 | 与真实输入框共享草稿；回车发送，Shift+Enter 换行 |
 | 拖拽上传 | 把文件拖到任一可写窗口即上传到该会话的草稿附件，与真实输入框共用同一份；卡片显示上传状态和附件数，回车发送时一起投递 |
 | 权限审批 | 待审批时卡片显示工具与原因，可直接「允许一次 / 拒绝」 |
-| 批量永久删除 | 多选后删除窗口及对应会话，需二次确认（依赖 `session-delete`） |
+| 批量永久删除 | 多选后删除窗口及对应会话，需二次确认（依赖 `dsh-session-delete`） |
 | 其他 | 历史消息分页、搜索、状态筛选、工作区标签、运行中徽标、中英双语 |
 
 ## 📦 安装
@@ -33,7 +39,7 @@
 dsh plugin --profile web add @yornii/dsh-session-unfold
 ```
 
-未发布 npm 时改用 `dsh plugin --profile web add github:yornii/dsh-session-unfold`；也可以克隆仓库，在插件管理器里安装含 `package.json` 的目录。安装后刷新页面，左下角出现「任务大屏」；卸载即移除本插件，不改动 DSH 的任何原有文件。永久删除还需要启用提供 `delete-session` 命令的 `session-delete` 插件。
+未发布 npm 时改用 `dsh plugin --profile web add github:yornii/dsh-session-unfold`；也可以克隆仓库，在插件管理器里安装含 `package.json` 的目录。安装后刷新页面，左下角出现「任务大屏」；卸载即移除本插件，不改动 DSH 的任何原有文件。永久删除还需要启用提供 `delete-session` 命令的 `dsh-session-delete` 插件。
 
 ## ⚙️ 配置
 
@@ -62,7 +68,7 @@ node tools/render-test.mjs
 
 - 状态与窗口尺寸只存在本机浏览器，换机器不同步。
 - 实时刷新、跳转导航与尺寸持久化依赖真实页面，离线测试覆盖不到。
-- 永久删除依赖 `session-delete`，删除后不能从「已归档」恢复。
+- 永久删除依赖 `dsh-session-delete`，删除后不能从「已归档」恢复。
 - 草稿同步只同步文本，引用 chip / 附件预览从卡片改写会退化为纯文本。
 - 拖拽上传的附件与真实输入框共用同一份草稿附件；卡片只显示附件数量，预览和移除在会话输入框里完成。
 - 审批卡片只覆盖审批类交互，计划审阅、提问等仍需进入会话。
