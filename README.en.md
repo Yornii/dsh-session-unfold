@@ -14,7 +14,7 @@ A client-side plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deeps
 
 ## 🎯 Why
 
-The session list gives only a title and a timestamp. With many tasks you cannot tell what is running, what waits for you, and what is done. This board lays those signals out on one screen, sorted In progress → To decide → Done, with a reply box on every card.
+The session list gives only a title and a timestamp. With many tasks you cannot tell what is running, what waits for you, and what is done. This board lays those signals out on one screen, sorted In progress → Done → To decide, with a reply box on every card.
 
 ## ✨ Features
 
@@ -22,9 +22,9 @@ The session list gives only a title and a timestamp. With many tasks you cannot 
 | --- | --- |
 | Full-screen board | Opened from the sidebar footer; Esc or ✕ closes |
 | Message timeline | User messages and Markdown-rendered assistant replies; All / User only toggle |
-| Clarifying questions | `ask_user_question` prompts show as assistant messages with the answer right after; skipped questions say "Skipped" |
+| Clarifying questions | `ask_user_question` prompts show as assistant messages with the answer right after; while pending they can be answered right on the card (pick options or type), and skipped questions say "Skipped" |
 | New window | Creates a Session from the header and adds its card without navigating away |
-| Status & pin | In progress / To decide / Done inferred and read-only; pinning shares the sidebar's data; the rest sort by recent activity |
+| Status & pin | In progress / Done / To decide inferred and read-only; pinning shares the sidebar's data; the rest sort by recent activity |
 | Subagent windows | Header toggle shows subagent Sessions, hidden by default; read-only |
 | Card controls | Resize with snapping, double-click to reset, inline rename, a dedicated Open session button |
 | Inline reply | Shares the real session draft; Enter sends, Shift+Enter adds a line |
@@ -49,10 +49,11 @@ None required. Card sizes live in the browser-local `dsh.task-board.card-size.v1
 
 - Client-only plugin: all logic lives in `client.js`; it registers `sidebar.footer.action` and `shell.overlay` and overrides nothing.
 - Each card calls `ctx.sessions.retain(sessionId)` for the recent event window and re-folds on change; assistant replies render through a safe Markdown subset, other tool calls stay hidden.
-- `ask_user_question` questions live in `tool/call` and answers in the `tool/result` with the same `callId`; folding yields an assistant question bubble plus a user answer bubble.
+- `ask_user_question` questions live in `tool/call` and answers in the `tool/result` with the same `callId`; folding yields an assistant question bubble plus a user answer bubble. While pending, the card renders the live `useSessionStatus` pending interaction as an option panel and submits through `pending.answer({ answers })`, the same waterfall/Remote channel as the composer question card.
 - Files dropped on a card become that Session's draft attachments through `scope.get('conversation').createDrafts(sessionId, files, true)`, which starts the uploads; the input shell's `addAttachments` publishes the ids and the card reports upload state. Sending from the card adds each ready `{ type: 'file', receiptId }` block to the prompt and clears the draft attachments afterwards.
 - The board is portaled to `document.body` and lifted above the host's full-viewport drag mask (a body portal at `z-index:1000`); file drags stop at the board (and are captured outside it while it is open), so the shell's composer mask never appears or gets left behind in the session view. Drops that miss a card are swallowed by the board instead of falling through to the hidden composer.
 - New window uses `ctx.sessions.create`, pinning `uiWorkspace.pinSession`, approvals `approval.answer`, replies `binding.session.prompt(..., 'queue')`, rename `binding.session.rename`.
+- The header balance comes from the optional `remote.account` injection: `getBalance({ version, locale, timezoneOffsetSeconds })`, read when the board opens and refreshed every minute. It hides when signed out, unauthorized or failed, and formats `¥`/`$` with two decimals (`<¥0.01` below a cent).
 - Subagent rows (`origin === 'subagent'`) stay hidden by default and read-only; status and approvals read `useSessionStatus`; styling uses host theme tokens.
 
 ## 🧪 Checks
@@ -71,7 +72,7 @@ node tools/render-test.mjs
 - Permanent deletion needs `dsh-session-delete`; deleted Sessions cannot be restored from the archive.
 - Draft sync is text-only; reference chips and attachment previews degrade to plain text when edited from a card.
 - Dropped files share the real composer's draft attachments; the card shows only the count, while previews and removal stay in the session composer.
-- The approval banner covers approvals only; plan reviews, questions and other pending interactions still need the session.
+- Approvals and questions can both be handled on the card; plan reviews (`plan-review`) and other pending interactions still need the session.
 - Late answers in timed mode and question/answer pairs split across pages are not shown; the board starts with 12 cards and pages in the rest.
 
 ## 📄 License
