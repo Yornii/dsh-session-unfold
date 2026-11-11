@@ -155,6 +155,11 @@ const t = (key, params) => {
   openSession: 'Open session', editTitle: 'Edit title', renameFailed: 'Rename failed',
     selectWindow: 'Select window', messageFilter: 'Message display', allMessages: 'All', userOnly: 'User only',
     clarifySkipped: 'Skipped', clarifyAnswerLine: '{label}: {answer}',
+    dropFiles: 'Drop to upload', uploadingFiles: 'Uploading {n} attachment(s)…',
+    attachmentsUploading: 'Attachments are still uploading', filesAttached: 'Added {n} attachment(s)',
+    uploadFailed: 'Upload failed: {message}', uploadFailedCount: '{n} attachment(s) failed to upload',
+    uploadBlocked: 'This conversation cannot accept attachments', uploadUnavailable: 'Attachments are not available',
+    attachments: '{n} attachment(s)',
     tool: 'tool', approvalWaiting: 'Waiting: {tool}',
     allowOnce: 'Allow once', reject: 'Reject', approvalFailed: 'Approval failed',
     noSessions: 'No tasks', noMatch: 'No matches', loadingCard: 'Loading…', loadFailed: 'Load failed',
@@ -214,7 +219,7 @@ console.log('HAS_AUTO_DONE:', boardHtml.includes('data-status="done"'))
 // ---- clarification folding (questions live in tool/call, answers in tool/result) ----
 // The board body fills from `useEffect`, which static rendering skips, so the
 // timeline is asserted against the module's own folding seam instead.
-const { summarize, answerText, MarkdownText } = value.__test
+const { summarize, answerText, MarkdownText, filesFromList, attachFilesToSession } = value.__test
 const folded = summarize(windows.get('c'))
 const questionItem = folded.items.find(item => item.clarify === true && item.kind === 'assistant')
 const answerItem = folded.items.find(item => item.clarify === true && item.kind === 'user')
@@ -223,6 +228,36 @@ const questionHtml = questionItem === undefined
   : renderToStaticMarkup(React.createElement(MarkdownText, { text: questionItem.text }))
 const answer = answerItem === undefined ? '' : answerText(answerItem, t)
 const pendingFolded = summarize(windows.get('a'))
+
+// ---- dropped files become the target Session's draft attachments ----
+const attachCalls = []
+const releasedDrafts = []
+const fakeConversation = {
+  createDrafts: (_sessionId, files) => files.map((file, index) => ({ id: `draft-${index}`, kind: 'file', file })),
+  releaseDraftAttachments: (drafts) => { for (const draft of drafts) releasedDrafts.push(draft.id) },
+  input: { for: () => ({ actions: { addAttachments: (ids) => { attachCalls.push(...ids); return true } } }) },
+  fileUploads: { subscribe: () => () => {}, getSnapshot: () => ({}) },
+}
+const fakeSessions = { scope: () => ({ get: () => fakeConversation }) }
+const attachOk = attachFilesToSession(fakeSessions, 'a', [
+  { name: 'notes.md', size: 12 },
+  { name: 'shot.png', size: 34 },
+], undefined)
+const attachJunk = filesFromList([null, { name: 'missing-size' }, { name: 'ok.txt', size: 1 }])
+const attachBlocked = attachFilesToSession(
+  { scope: () => ({ get: () => ({ ...fakeConversation, input: { for: () => ({ actions: { addAttachments: () => false } }) } }) }) },
+  'a',
+  [{ name: 'x.txt', size: 1 }],
+  undefined,
+)
+const attachFailed = attachFilesToSession(
+  { scope: () => ({ get: () => ({ createDrafts: () => { throw new Error('nope') } }) }) },
+  'a',
+  [{ name: 'x.txt', size: 1 }],
+  undefined,
+)
+const attachUnavailable = attachFilesToSession({ scope: () => ({ get: () => undefined }) }, 'a', [{ name: 'x.txt', size: 1 }], undefined)
+console.log('ATTACH_OK:', JSON.stringify(attachOk.ok), attachCalls.join(','), 'RELEASED:', releasedDrafts.join(','))
 console.log('CLARIFY_QUESTION_HTML:', questionHtml)
 console.log('CLARIFY_ANSWER:', JSON.stringify(answer))
 
@@ -248,6 +283,17 @@ if (!pendingFolded.items.some(item => item.clarify === true && item.kind === 'as
 if (pendingFolded.items.some(item => item.clarify === true && item.kind === 'user')) failures.push('unanswered question produced an answer bubble')
 if (!source.includes('__test')) failures.push('folding seam missing')
 if (!source.includes("const QUESTION_TOOL = 'ask_user_question'")) failures.push('clarifying question tool is not recognized')
+if (attachOk.ok !== true || attachOk.drafts.length !== 2) failures.push('dropped files are not attached as drafts')
+if (attachCalls.join(',') !== 'draft-0,draft-1') failures.push(`attachment ids are not published to the input shell: ${attachCalls.join(',')}`)
+if (attachJunk.length !== 1 || attachJunk[0].name !== 'ok.txt') failures.push('non-file drop items are not filtered')
+if (attachBlocked.ok !== false || attachBlocked.reason !== 'blocked' || !releasedDrafts.includes('draft-0')) failures.push('blocked attachment drop does not release drafts')
+if (attachFailed.ok !== false || attachFailed.reason !== 'failed' || attachFailed.message !== 'nope') failures.push('failing draft creation is not reported')
+if (attachUnavailable.ok !== false || attachUnavailable.reason !== 'unavailable') failures.push('session without the conversation service is not reported')
+if (!source.includes('createDrafts') || !source.includes('addAttachments')) failures.push('dropped files are not routed through the conversation service')
+if (!source.includes('dshtb-dropCue') || !source.includes('dshtb-attachChip')) failures.push('drop handling UI missing')
+if (!source.includes('createPortal') || !source.includes('z-index:1001')) failures.push('board is not lifted above the host drag mask')
+if (!source.includes('dragSessionId') || !source.includes('onDropCapture')) failures.push('board-level drag tracking missing')
+if (!source.includes("type: 'file', receiptId")) failures.push('inline reply does not send uploaded attachments')
 if (order[0] !== 'Investigate p99 latency') failures.push(`pinned task should sort first, got ${order[0]}`)
 if (!boardHtml.includes('dshtb-cardWrap')) failures.push('resizable card wrapper missing')
 if (!boardHtml.includes('dshtb-resize')) failures.push('card resize handle missing')

@@ -2,124 +2,72 @@
   <img src="https://raw.githubusercontent.com/yornii/dsh-session-unfold/main/assets/social-preview.png" alt="dsh-session-unfold — Unfold your sessions. See the whole flow.">
 </p>
 
-一个 DeepSeek Harness（DSH）Web 客户端插件：把侧边栏那份「一列标题 + 几天前」的会话列表，换成一个全屏的会话平铺视图——每个会话一张卡片，卡片里是这个会话最近几条消息，状态一眼可见，点一下直接进去。
+一个 DeepSeek Harness（DSH）Web 客户端插件：把侧边栏的会话列表换成全屏平铺视图，一个会话一张卡片，最近消息一目了然，点开即进。
 
-## 它解决什么
+> English: [README.en.md](README.en.md)
 
-DSH 的会话列表只给你标题和时间，任务一多就完全看不出「哪些在跑、哪些等我拍板、哪些已经完事」。这个插件把这些信息铺开成一张大屏：
+## 🎯 它解决什么
 
-- 顶栏「新建窗口」会新建一个会话，并把对应卡片加入大屏；大屏不关闭，一个窗口对应一个会话
-- 每个窗口默认显示用户消息、Markdown 格式的助手回复，以及助手的澄清提问和你的选择，可切换为仅显示用户消息
-- 支持置顶窗口，置顶状态与顺序和侧栏会话置顶共用同一份数据
-- 可切换显示子智能体窗口，默认隐藏
-- 每个窗口都能拖动右下角自由调整大小，并吸附对齐其它窗口
-- 支持批量永久删除窗口及对应会话，删除前需二次确认
-- 点击标题即可修改窗口标题，会话标题同步更新
-- 每张卡片有独立的“打开会话”按钮，点击卡片空白处不再跳转
-- 按状态分组排序：进行中 → 待确定 → 已完成，看得见的永远是当前在处理的
-- 卡片上直接回一句话，不用先切会话
-- 每张卡片显示所属工作区，跨工作区也不会认错
+会话列表只给标题和时间，任务一多就分不清哪些在跑、哪些等我拍板、哪些已经完事。这个插件把这些信号铺在一张屏上，按 进行中 → 待确定 → 已完成 排序，并允许就地回一句话。
 
-## 功能
+## ✨ 功能
 
 | 能力 | 说明 |
 | --- | --- |
-| 全屏任务大屏 | 左下角「任务大屏」按钮打开，铺满窗口，Esc 或右上角 ✕ 关闭 |
-| 新建窗口 | 顶栏「新建窗口」在当前/最近工作区创建一个新会话，并把对应卡片加入大屏；不跳转会话，大屏保持打开，一个窗口对应一个会话 |
-| 每格一个消息窗 | 默认显示用户消息和 Markdown 格式的助手回复；工具调用不显示。窗口顶部「全部 / 仅用户」开关可只保留用户消息 |
-| 澄清提问 | 助手用 `ask_user_question` 提出的澄清问题按助手消息显示（问题、选项说明），用户的选择紧随其后以用户消息显示；跳过的问题标注「已跳过」。问题与回答通过工具调用 id 配对，不会重复或错位 |
-| 进行中高亮 | 状态为「进行中」的窗口，最后一条用户消息气泡显示为绿色 |
-| 权限审批同步 | 会话出现待处理的权限审批时，卡片显示工具名与原因，并可直接“允许一次”或“拒绝”；审批完成后自动消失 |
-| 历史消息 | 卡片顶部「加载更早消息」按钮通过 Session 事件窗口向上分页，逐页加载更早的消息 |
-| 状态分组 | 进行中 / 待确定 / 已完成，完全由会话运行状态自动推断，用户不能手动修改 |
-| 排序 | 置顶窗口优先，其次按 进行中 → 待确定 → 已完成，同状态内按最近活跃时间倒序 |
-| 窗口置顶 | 卡片右上角置顶按钮调用侧栏相同的会话 pin 服务；置顶顺序与侧栏一致，侧栏置顶也会同步到大屏 |
-| 子智能体窗口 | 顶栏「子智能体」开关控制是否显示子智能体会话窗口，默认隐藏；卡片带“子”标识。子智能体窗口为纯只读视图：不提供输入、标题编辑、置顶、审批操作、批量选择或打开会话按钮 |
-| 搜索 | 按任务标题或工作区名过滤 |
-| 状态筛选 | 只看某一类状态 |
-| 窗口大小 | 拖动卡片右下角调整宽高，靠近其它卡片宽高时自动吸附；双击手柄或点顶栏 ↺ 恢复默认；尺寸记在本地 |
-| 批量管理 | 顶栏“批量管理”进入多选；可全选当前、清除选择 |
-| 永久删除窗口 | 删除窗口即删除对应会话：调用 `session-delete` 插件的 `delete-session` 命令，永久删除会话记录并停止正在运行的工作；需二次确认，无法恢复 |
-| 修改标题 | 点击卡片标题进入行内编辑，回车保存、Esc 取消；调用会话 rename，同步修改对话标题 |
-| 打开会话 | 卡片右上角独立按钮；点击卡片正文、气泡或空白处不会再跳转 |
-| 输入双向同步 | 卡片输入框与对应会话的真实输入框内容实时双向同步，共享同一份草稿 |
-| 输入框换行 | 输入框为自动增高的多行文本框，内容超出宽度自动换行；Shift+Enter 换行，Enter 发送 |
-| 内联回复 | 卡片底部输入框，回车直接进该会话队列 |
-| 工作区标签 | 标题行右侧显示所属工作区 |
-| 运行中徽标 | 侧边栏按钮上的绿色数字，显示当前有几个任务在跑 |
-| 中英双语 | 跟随 DSH 的界面语言 |
+| 全屏大屏 | 左下角「任务大屏」打开，Esc 或 ✕ 关闭 |
+| 消息时间线 | 用户消息 + Markdown 助手回复；顶部「全部 / 仅用户」切换 |
+| 澄清提问 | `ask_user_question` 的问题按助手消息显示，回答紧随其后；跳过的题标注「已跳过」 |
+| 新建窗口 | 顶栏新建会话并加入大屏，不跳转 |
+| 状态与置顶 | 进行中 / 待确定 / 已完成 自动推断、只读；置顶与侧栏共用一份数据，其余按活跃时间倒序 |
+| 子智能体窗口 | 顶栏开关显示子会话，默认隐藏；纯只读 |
+| 卡片操作 | 缩放并吸附其它卡片、双击重置、行内改名、独立「打开会话」按钮 |
+| 内联回复 | 与真实输入框共享草稿；回车发送，Shift+Enter 换行 |
+| 拖拽上传 | 把文件拖到任一可写窗口即上传到该会话的草稿附件，与真实输入框共用同一份；卡片显示上传状态和附件数，回车发送时一起投递 |
+| 权限审批 | 待审批时卡片显示工具与原因，可直接「允许一次 / 拒绝」 |
+| 批量永久删除 | 多选后删除窗口及对应会话，需二次确认（依赖 `session-delete`） |
+| 其他 | 历史消息分页、搜索、状态筛选、工作区标签、运行中徽标、中英双语 |
 
-## 安装
+## 📦 安装
 
 ```sh
 dsh plugin --profile web add @yornii/dsh-session-unfold
 ```
 
-包还没发到 npm 时，先从源码装：
+未发布 npm 时改用 `dsh plugin --profile web add github:yornii/dsh-session-unfold`；也可以克隆仓库，在插件管理器里安装含 `package.json` 的目录。安装后刷新页面，左下角出现「任务大屏」；卸载即移除本插件，不改动 DSH 的任何原有文件。永久删除还需要启用提供 `delete-session` 命令的 `session-delete` 插件。
 
-```sh
-dsh plugin --profile web add github:yornii/dsh-session-unfold
-```
+## ⚙️ 配置
 
-也可以把本仓库克隆到本地，在 DSH 的插件管理器里安装包含 `package.json` 的那个目录（`plugin_manager` 的 `install_bundle`，target 传目录的绝对路径）。安装返回 `application: applied` 后刷新 Web 页面，左下角会出现「任务大屏」。
+无需配置。卡片尺寸存在浏览器 localStorage 的 `dsh.task-board.card-size.v1`；状态只读派生：运行中为「进行中」，非主视图会话刚结束且完成提醒未读为「已完成」，其余为「待确定」。
 
-永久删除窗口依赖一个单独的 `session-delete` 插件提供的 `delete-session` 命令；未安装并启用该插件时，删除会提示命令不可用。
+## 🧩 实现要点
 
-卸载：在插件管理器里移除 `@yornii/dsh-session-unfold` 即可，本插件不改动 DSH 的任何原有文件。
+- 纯客户端插件，逻辑全在 `client.js`；注册 `sidebar.footer.action` 与 `shell.overlay` 两个槽位，不覆盖任何已有 UI。
+- 卡片通过 `ctx.sessions.retain(sessionId)` 读取事件窗口并订阅变化；助手回复走内置安全 Markdown 子集，其他工具调用不显示。
+- `ask_user_question` 的问题在 `tool/call`、回答在同 `callId` 的 `tool/result`，折叠成「助手问题气泡 + 用户回答气泡」。
+- 拖到卡片的文件通过 `scope.get('conversation').createDrafts(sessionId, files, true)` 注册为该会话的草稿附件并自动开始上传，再由输入框 shell 的 `addAttachments` 发布；卡片内回车发送时把就绪上传的 `receiptId` 以 `{ type: 'file', receiptId }` 一并投递，成功后清理草稿附件。
+- 大屏通过 `createPortal` 挂到 `document.body` 并置于宿主拖拽蒙版（body portal，`z-index:1000`）之上；同时文件拖拽事件在大屏内停止冒泡、在大屏外的文档捕获阶段被拦截，宿主会话的全屏蒙版不会出现也不会残留到会话界面。落在卡片外的文件由大屏吞掉，不会误投给背后的会话输入框。
+- 新建窗口走 `ctx.sessions.create`，置顶走 `uiWorkspace.pinSession`，审批走 `approval.answer`，回复走 `binding.session.prompt(..., 'queue')`，改名走 `binding.session.rename`。
+- 子会话取 `origin === 'subagent'` 且只读；状态与审批读 `useSessionStatus`；样式全部使用宿主主题变量。
 
-## 配置
-
-不需要额外配置。以下数据存在浏览器本地（不会写入会话日志，也不影响 Host）：
-
-| localStorage 键 | 内容 |
-| --- | --- |
-| `dsh.task-board.card-size.v1` | 会话 id → 卡片尺寸 `{ w, h }` |
-
-状态派生规则（只读）：运行中记为「进行中」；非主视图会话刚结束且完成提醒未读时记为「已完成」；其余记为「待确定」。
-
-## 实现要点
-
-- 纯客户端插件：Host 半身是空实现，全部逻辑在 `client.js`（单文件，无构建步骤）
-- 注册两个槽位，不覆盖任何已有 UI：
-  - `sidebar.footer.action`：启动按钮
-  - `shell.overlay`：全屏大屏
-- 新建窗口调用 `ctx.sessions.create({ workspaceId })`（侧栏 New Session 使用的同一个 Host `session/create` 端点），成功后把新 Session 的 id 直接加入大屏；不调用会导航的 `uiWorkspace.startSession()`，因此大屏保持打开。工作区选择复刻 New Session：主视图当前 Session 所属工作区优先，否则最近活跃工作区；按钮由 `useRemoteAccess('session/create')` 门控
-- 每个卡片通过 `ctx.sessions.retain(sessionId, { source: 'taskBoard' })` 拿到该会话的最近事件窗口，订阅变化后重新折叠，卸载时释放引用
-- 卡片把 `user/message` 与 `assistant/message` 折叠成同一时间线；助手回复用内置的安全 Markdown 子集渲染（标题、粗体、斜体、行内代码、代码块、列表、表格、引用、链接）；工具调用不进入卡片。「全部 / 仅用户」开关只过滤视图，不改变底层事件窗口。窗口尺寸用 Pointer Events 拖动，靠近其它卡片尺寸时吸附并写入 localStorage
-- `ask_user_question` 不在 `assistant/message` 里：问题在 `tool/call` 的 `arguments.questions`，回答在同 `callId` 的 `tool/result` 里。折叠时把问题渲染成一条助手气泡（标题加粗、问题正文、选项与说明的列表），再用配对结果补一条用户气泡（每题一行，`header：所选答案`，被跳过或空选的题显示「已跳过」）；没有结果的提问只显示问题，错误结果不产生回答气泡。其他工具调用仍然不显示
-- 窗口置顶读取 `useWorkspaces().pinnedSessionIds` 并按该顺序排在普通窗口之前；卡片按钮调用 `uiWorkspace.pinSession` / `unpinSession`，因此侧栏与大屏的置顶状态、顺序始终一致
-- 子智能体窗口来自 `useSessions().byId` 中 `origin === 'subagent'` 的行，由顶栏开关控制是否加入卡片列表，默认不加入。子智能体卡片是纯只读视图：不渲染输入框、标题编辑、置顶、审批按钮、批量选择框或「打开会话」按钮
-- 历史消息使用 `binding.session.loadOlder()`：它向当前事件窗口前插一页（至少 50 条消息、两个 turn），`eventSource` 的 `hasMore` 决定是否继续显示「加载更早消息」
-- 标题编辑调用 `binding.session.rename(title)`，成功后标题投影会同步到侧栏会话标题
-- 输入框通过 `sessions.scope(sessionId)` 拿到 `conversation.input.for(scope)`，订阅其 InputState 的 `draft`，并用 `actions.setDraft(text)` 回写；两边始终读写同一份会话草稿
-- 输入框使用自动增高的 `textarea`，按 `scrollHeight` 调整高度，超过 `96px` 后内部滚动
-- 卡片状态只读：从 `shell.overlay` 标准 prop `useSessionStatus` 读取 `running` / `completionUnread`，卡片标题前仅显示状态点和文字，没有手动修改入口，也不写入 localStorage
-- 权限审批读取同一个 `useSessionStatus`：`pendingInteraction.kind === 'approval'` 时渲染卡片横幅，按钮直接调用 `approval.answer('allowed-once')` / `approval.answer('rejected')`，不跳转会话
-- 批量删除即永久删除会话：对每个选中窗口执行 `ctx.remote.commands.execute(sessionId, '/delete-session <id>', [])`，复用 `session-delete` 插件的 Host 逻辑来停止活动、校验会话目录并删除记录；需第二次确认，失败时保留对应窗口。插件需与 `session-delete` 同时启用
-- 已归档会话通过 `useWorkspaces().archivedSessionIds` 从大屏过滤，恢复归档后会重新出现
-- 会话列表来自槽位标准 prop `useSessions`；列表接口在超大会话库上可能很慢，此时退回用控制通道已填充的 `byId` 渲染，避免长时间空屏
-- 内联回复调用 `binding.session.prompt([{ type: 'text', text }], 'queue')`
-- 样式全部使用宿主主题变量（`--dsw-alias-*`、`--dsw-radius-*`），明暗主题自动跟随
-
-## 自检
+## 🧪 自检
 
 ```bash
 node --check client.js
 node tools/render-test.mjs
 ```
 
-`tools/render-test.mjs` 是一个离线渲染冒烟测试：用假 Host 加载 `client.js`，喂若干合成会话，把大屏渲染成 HTML 后断言卡片结构、完整消息时间线、可调尺寸与控件存在性。它不依赖浏览器，可在 CI 里跑。
+`tools/render-test.mjs` 用假 Host 离线渲染大屏，断言卡片结构、消息时间线、尺寸手柄与控件，不依赖浏览器。
 
-## 已知限制
+## ⚠️ 已知限制
 
-- 状态和窗口尺寸只记录在本机浏览器，换机器不同步
-- 实时刷新、跳转导航、状态持久化这三条依赖真实运行中的 Web 页面，离线冒烟测试覆盖不到
-- DSH 本身没有永久删除会话的接口；本插件的批量删除通过 `session-delete` 的 `delete-session` 命令完成，未启用该插件时删除会失败。删除后的会话不能从“已归档”恢复
-- 输入双向同步的是草稿文本；卡片没有会话输入框里的引用 chip/附件预览，从卡片改写草稿时这些富段落会退化为纯文本
-- 权限审批卡片只覆盖审批类交互；计划审阅、提问等其他 pending interaction 仍需进入会话处理
-- 澄清提问按工具调用 id 配对问题与回答：timed 模式下提问到期后以迟到回复送达的回答走 `user-question-reply` 用户消息，卡片只显示问题、不显示这条迟到回答；问题与结果被分页切开时，需要「加载更早消息」才能显示回答
-- 大屏初始显示 12 个窗口，更多任务靠底部「再看 N 个」翻页，未做虚拟滚动
+- 状态与窗口尺寸只存在本机浏览器，换机器不同步。
+- 实时刷新、跳转导航与尺寸持久化依赖真实页面，离线测试覆盖不到。
+- 永久删除依赖 `session-delete`，删除后不能从「已归档」恢复。
+- 草稿同步只同步文本，引用 chip / 附件预览从卡片改写会退化为纯文本。
+- 拖拽上传的附件与真实输入框共用同一份草稿附件；卡片只显示附件数量，预览和移除在会话输入框里完成。
+- 审批卡片只覆盖审批类交互，计划审阅、提问等仍需进入会话。
+- timed 提问的迟到回答、被分页切开的问题与回答不显示；大屏初始 12 个窗口，其余靠「再看 N 个」翻页。
 
-## 许可
+## 📄 许可
 
 [MIT](LICENSE)

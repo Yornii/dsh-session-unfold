@@ -12,6 +12,11 @@ window.__ModuleLoader__.load({
   factory(require) {
     const React = require('react')
     const h = React.createElement
+    // The shell's overlay slot sits inside a stacking context below the host's
+    // full-viewport file-drag mask (a body portal at z-index 1000), so the board
+    // is portaled to <body> and lifted above it while a file drag is in flight.
+    let createPortal
+    try { createPortal = require('react-dom').createPortal } catch (_error) { createPortal = undefined }
 
     const NS = 'task-board'
     const INITIAL_VISIBLE = 12
@@ -205,6 +210,76 @@ window.__ModuleLoader__.load({
         lines.push(label === '' ? value : t('clarifyAnswerLine', { label, answer: value }))
       }
       return lines.join('\n')
+    }
+
+    // ── dropped files → the Session's real draft attachments ──
+    // The Conversation service owns draft attachments: `createDrafts` registers
+    // the files and starts their uploads, and the resident input shell publishes
+    // the ids, so the file appears in the same attachment rail as a composer pick.
+    function filesFromList(list) {
+      const files = []
+      if (list === undefined || list === null) return files
+      for (const item of Array.from(list)) {
+        if (item === null || typeof item !== 'object') continue
+        if (typeof item.name !== 'string' || typeof item.size !== 'number') continue
+        files.push(item)
+      }
+      return files
+    }
+
+    /** Whether a drag event carries external files (not text or app drags). */
+    function draggedFiles(event) {
+      const dataTransfer = event.dataTransfer
+      if (dataTransfer === undefined || dataTransfer === null) return false
+      const types = dataTransfer.types
+      if (types === undefined || types === null || typeof types.includes !== 'function') return false
+      return types.includes('Files')
+    }
+
+    /**
+     * Attach dropped files to a Session's draft through the Conversation service.
+     * @param sessions - the slot's Session service (scope lookup).
+     * @param sessionId - target Session.
+     * @param list - a FileList or array of Files.
+     * @param shell - the card's resident input shell, when it has one.
+     * @returns `{ ok: true, conversation, drafts }` or a failure reason.
+     */
+    function attachFilesToSession(sessions, sessionId, list, shell) {
+      const files = filesFromList(list)
+      if (files.length === 0) return { ok: false, reason: 'empty' }
+      let scope
+      let conversation
+      try {
+        scope = sessions.scope(sessionId)
+        conversation = scope === undefined ? undefined : scope.get('conversation')
+      } catch (_error) {
+        conversation = undefined
+      }
+      if (conversation === undefined || conversation === null || typeof conversation.createDrafts !== 'function') {
+        return { ok: false, reason: 'unavailable' }
+      }
+      let drafts
+      try {
+        drafts = conversation.createDrafts(sessionId, files, true)
+      } catch (error) {
+        return { ok: false, reason: 'failed', message: error instanceof Error ? error.message : String(error) }
+      }
+      let target = shell
+      if (target === undefined || target === null) {
+        try { target = conversation.input.for(scope) } catch (_error) { target = undefined }
+      }
+      if (target === undefined || target === null || target.actions === undefined
+        || typeof target.actions.addAttachments !== 'function') {
+        try { conversation.releaseDraftAttachments(drafts) } catch (_error) { /* best effort */ }
+        return { ok: false, reason: 'unavailable' }
+      }
+      let accepted = false
+      try { accepted = target.actions.addAttachments(drafts.map(draft => draft.id)) } catch (_error) { accepted = false }
+      if (accepted !== true) {
+        try { conversation.releaseDraftAttachments(drafts) } catch (_error) { /* best effort */ }
+        return { ok: false, reason: 'blocked' }
+      }
+      return { ok: true, conversation, drafts }
     }
 
     // ── compact, safe Markdown for assistant replies ──
@@ -501,7 +576,7 @@ window.__ModuleLoader__.load({
     // ── one Session card ──
     function Card(props) {
       const {
-        sessionId, summary, status, workspace, size, selecting, selected, approval, pinned,
+        sessionId, summary, status, workspace, size, selecting, selected, approval, pinned, dragOver,
         t, sessions, now, onOpen, onToggleSelect, onTogglePin, onResize, onResetSize,
       } = props
       const [state, setState] = React.useState(null)
@@ -519,6 +594,8 @@ window.__ModuleLoader__.load({
       const [approvalBusy, setApprovalBusy] = React.useState(false)
       const [approvalError, setApprovalError] = React.useState(false)
       const [pinBusy, setPinBusy] = React.useState(false)
+      const [attachmentIds, setAttachmentIds] = React.useState([])
+      const [uploadNotice, setUploadNotice] = React.useState(null)
       const referenceRef = React.useRef(null)
       const dragCleanupRef = React.useRef(null)
       const bodyRef = React.useRef(null)
@@ -528,6 +605,8 @@ window.__ModuleLoader__.load({
       const skipTitleBlurRef = React.useRef(false)
       const inputShellRef = React.useRef(null)
       const inputRef = React.useRef(null)
+      const uploadWatchRef = React.useRef(null)
+      const uploadTimerRef = React.useRef(null)
 
       React.useEffect(() => {
         setDims(size)
@@ -551,6 +630,17 @@ window.__ModuleLoader__.load({
 
       React.useEffect(() => () => {
         if (dragCleanupRef.current !== null) dragCleanupRef.current()
+      }, [])
+
+      React.useEffect(() => () => {
+        if (uploadWatchRef.current !== null) {
+          uploadWatchRef.current()
+          uploadWatchRef.current = null
+        }
+        if (uploadTimerRef.current !== null) {
+          window.clearTimeout(uploadTimerRef.current)
+          uploadTimerRef.current = null
+        }
       }, [])
 
       React.useEffect(() => {
@@ -600,6 +690,7 @@ window.__ModuleLoader__.load({
           try {
             const snapshot = shell.state.getSnapshot()
             setDraft(typeof snapshot.draft === 'string' ? snapshot.draft : '')
+            setAttachmentIds(Array.isArray(snapshot.attachmentIds) ? snapshot.attachmentIds : [])
           } catch (_error) {
             /* The composer may be torn down while the card is still mounted. */
           }
@@ -630,15 +721,134 @@ window.__ModuleLoader__.load({
         resizeTextarea()
       }, [draft, dims.w])
 
+      const readOnly = summary.origin === 'subagent'
+
+      const showUploadNotice = (kind, text, ttl) => {
+        setUploadNotice({ kind, text })
+        if (uploadTimerRef.current !== null) {
+          window.clearTimeout(uploadTimerRef.current)
+          uploadTimerRef.current = null
+        }
+        if (ttl !== undefined && ttl > 0) {
+          uploadTimerRef.current = window.setTimeout(() => {
+            uploadTimerRef.current = null
+            setUploadNotice(null)
+          }, ttl)
+        }
+      }
+
+      const stopUploadWatch = () => {
+        if (uploadWatchRef.current !== null) {
+          uploadWatchRef.current()
+          uploadWatchRef.current = null
+        }
+      }
+
+      // Watch the Conversation service's upload store for the files this drop
+      // added, so the card reports upload progress and failures in place.
+      const watchUploads = (conversation, drafts) => {
+        stopUploadWatch()
+        const store = conversation.fileUploads
+        if (store === undefined || store === null || typeof store.subscribe !== 'function') return
+        const ids = drafts.map(draft => draft.id)
+        const read = () => {
+          const snapshot = store.getSnapshot() || {}
+          let uploading = 0
+          let ready = 0
+          let failed = 0
+          for (const id of ids) {
+            const status = snapshot[id] === undefined ? '' : snapshot[id].status
+            if (status === 'error') failed += 1
+            else if (status === 'ready') ready += 1
+            else uploading += 1
+          }
+          if (failed > 0) {
+            showUploadNotice('error', t('uploadFailedCount', { n: failed }), 0)
+            return
+          }
+          if (uploading > 0) {
+            showUploadNotice('info', t('uploadingFiles', { n: ids.length }), 0)
+            return
+          }
+          stopUploadWatch()
+          showUploadNotice('ok', t('filesAttached', { n: ready }), 5000)
+        }
+        uploadWatchRef.current = store.subscribe(read)
+        read()
+      }
+
+      const attachDropped = (list) => {
+        if (readOnly) return
+        const result = attachFilesToSession(sessions, sessionId, list, inputShellRef.current)
+        if (result.ok === true) {
+          watchUploads(result.conversation, result.drafts)
+          showUploadNotice('info', t('uploadingFiles', { n: result.drafts.length }), 0)
+          return
+        }
+        if (result.reason === 'empty') return
+        if (result.reason === 'failed') {
+          showUploadNotice('error', t('uploadFailed', { message: result.message ?? '' }), 6000)
+        } else if (result.reason === 'blocked') {
+          showUploadNotice('error', t('uploadBlocked'), 6000)
+        } else {
+          showUploadNotice('error', t('uploadUnavailable'), 6000)
+        }
+      }
+
+      const handleDrop = (event) => {
+        if (!draggedFiles(event)) return
+        event.preventDefault()
+        event.stopPropagation()
+        if (readOnly) return
+        const files = event.dataTransfer === undefined || event.dataTransfer === null ? undefined : event.dataTransfer.files
+        if (files !== undefined && files !== null) attachDropped(files)
+      }
+
       const send = async () => {
         const text = draft.trim()
         const reference = referenceRef.current
-        if (text === '' || sending || reference === null) return
+        if (sending || reference === null || (text === '' && attachmentIds.length === 0)) return
+        let conversation
+        try {
+          const scope = sessions.scope(sessionId)
+          conversation = scope === undefined ? undefined : scope.get('conversation')
+        } catch (_error) {
+          conversation = undefined
+        }
+        const uploads = conversation !== undefined && conversation !== null && conversation.fileUploads !== undefined
+          ? conversation.fileUploads.getSnapshot() || {}
+          : {}
+        const content = []
+        for (const id of attachmentIds) {
+          const upload = uploads[id]
+          if (upload === undefined || upload.status !== 'ready' || typeof upload.receiptId !== 'string') {
+            showUploadNotice('info', t('attachmentsUploading'), 4000)
+            return
+          }
+          content.push({ type: 'file', receiptId: upload.receiptId })
+        }
+        if (text !== '') content.push({ type: 'text', text })
+        const sentIds = attachmentIds
         updateDraft('')
         setSending(true)
         try {
-          const result = await reference.binding.session.prompt([{ type: 'text', text }], 'queue')
-          if (result === undefined || !result.ok) updateDraft(text)
+          const result = await reference.binding.session.prompt(content, 'queue')
+          if (result === undefined || !result.ok) {
+            updateDraft(text)
+            return
+          }
+          const shell = inputShellRef.current
+          if (shell !== null && sentIds.length > 0) {
+            for (const id of sentIds) {
+              try {
+                if (shell.actions.removeAttachment(id) && conversation !== undefined && conversation !== null) {
+                  conversation.releaseDraftAttachment(id)
+                }
+              } catch (_error) {
+                /* The draft already dropped the attachment. */
+              }
+            }
+          }
         } catch (_error) {
           updateDraft(text)
         } finally {
@@ -815,7 +1025,6 @@ window.__ModuleLoader__.load({
         if (items[index].kind === 'user') lastUserIndex = index
       }
       const failed = state !== null && state.failed === true
-      const readOnly = summary.origin === 'subagent'
 
       React.useEffect(() => {
         const body = bodyRef.current
@@ -848,6 +1057,8 @@ window.__ModuleLoader__.load({
         className: 'dshtb-card',
         'data-status': status,
         'data-selected': selected ? 'true' : undefined,
+        'data-drop': dragOver ? 'true' : undefined,
+        onDrop: handleDrop,
       },
       h('div', { className: 'dshtb-cardHead' },
         selecting && !readOnly
@@ -969,6 +1180,12 @@ window.__ModuleLoader__.load({
           setUserOnly(true)
         },
       }, t('userOnly'))),
+      uploadNotice === null
+        ? null
+        : h('div', {
+          className: `dshtb-uploadNotice dshtb-uploadNotice-${uploadNotice.kind}`,
+          role: 'status',
+        }, uploadNotice.text),
       approval !== null && approval !== undefined
         ? h('div', { className: 'dshtb-approval', role: 'status' },
           h('span', { className: 'dshtb-approvalDot' }),
@@ -1049,6 +1266,13 @@ window.__ModuleLoader__.load({
           className: 'dshtb-send',
           onClick: (event) => event.stopPropagation(),
         },
+        attachmentIds.length === 0
+          ? null
+          : h('span', {
+            className: 'dshtb-attachChip',
+            title: t('attachments', { n: attachmentIds.length }),
+            'aria-label': t('attachments', { n: attachmentIds.length }),
+          }, `📎 ${attachmentIds.length}`),
         h('textarea', {
           ref: inputRef,
           className: 'dshtb-input',
@@ -1073,10 +1297,13 @@ window.__ModuleLoader__.load({
         h('button', {
           type: 'button',
           className: 'dshtb-sendBtn',
-          disabled: sending || draft.trim() === '',
+          disabled: sending || (draft.trim() === '' && attachmentIds.length === 0),
           onClick: () => { void send() },
           title: t('send'),
         }, sending ? '…' : h(SendIcon))),
+      dragOver
+        ? h('div', { className: 'dshtb-dropCue', 'aria-hidden': true }, t('dropFiles'))
+        : null,
       h('button', {
         type: 'button',
         className: 'dshtb-resize',
@@ -1122,10 +1349,54 @@ window.__ModuleLoader__.load({
       const [createdSessionIds, setCreatedSessionIds] = React.useState(() => new Set())
       const [revealSessionId, setRevealSessionId] = React.useState(null)
       const [showSubagents, setShowSubagents] = React.useState(false)
+      const [dragSessionId, setDragSessionId] = React.useState(null)
+      const dragSessionRef = React.useRef(null)
       const gridRef = React.useRef(null)
       const creatingRef = React.useRef(false)
       const deletingRef = React.useRef(false)
       const t = props.t
+
+      React.useEffect(() => {
+        if (!open) return undefined
+        const clear = () => {
+          dragSessionRef.current = null
+          setDragSessionId(null)
+        }
+        window.addEventListener('dragend', clear)
+        window.addEventListener('drop', clear)
+        return () => {
+          window.removeEventListener('dragend', clear)
+          window.removeEventListener('drop', clear)
+        }
+      }, [open])
+
+      React.useEffect(() => {
+        if (open) return
+        dragSessionRef.current = null
+        setDragSessionId(null)
+      }, [open])
+
+      // File drags that pass over the window chrome (the board starts below the
+      // title bar) never reach the board's React handlers. Stop them at the
+      // document capture phase while the board is open so the shell's composer
+      // listeners cannot raise their mask; board-local drags are left alone.
+      React.useEffect(() => {
+        if (!open) return undefined
+        const guard = (event) => {
+          if (!draggedFiles(event)) return
+          const target = event.target
+          if (target instanceof Element && target.closest('.dshtb-layer') !== null) return
+          event.preventDefault()
+          event.stopPropagation()
+        }
+        // Leaves are not captured: letting a stray dragleave reach the shell
+        // lets it clear any mask left over from before the board opened.
+        const types = ['dragenter', 'dragover', 'drop']
+        for (const type of types) document.addEventListener(type, guard, true)
+        return () => {
+          for (const type of types) document.removeEventListener(type, guard, true)
+        }
+      }, [open])
 
       const archived = React.useMemo(() => new Set(archivedIds), [archivedIds])
       const pinnedOrder = React.useMemo(() => new Map(pinnedIds.map((id, index) => [id, index])), [pinnedIds])
@@ -1483,9 +1754,75 @@ window.__ModuleLoader__.load({
 
       if (!open) return null
 
-      return h(React.Fragment, null,
+      const dragTargetId = (event) => {
+        const target = event.target
+        if (target === null || target === undefined || typeof target.closest !== 'function') return null
+        const card = target.closest('[data-session]')
+        if (card === null) return null
+        const id = card.getAttribute('data-session')
+        if (id === null || byId[id]?.origin === 'subagent') return null
+        return id
+      }
+
+      const clearDragTarget = () => {
+        if (dragSessionRef.current === null) return
+        dragSessionRef.current = null
+        setDragSessionId(null)
+      }
+
+      // One board-level drag tracker instead of per-card enter/leave depth
+      // counters: the card under the pointer follows dragover, and leaving the
+      // board clears it. File drags stop at the board so the shell's document
+      // listeners never raise their full-viewport mask (which also got stuck
+      // after dragging out of the window).
+      const handleBoardDragEnter = (event) => {
+        if (!draggedFiles(event)) return
+        event.preventDefault()
+        event.stopPropagation()
+        if (event.dataTransfer !== undefined && event.dataTransfer !== null) event.dataTransfer.dropEffect = 'copy'
+        const id = dragTargetId(event)
+        dragSessionRef.current = id
+        setDragSessionId(id)
+      }
+
+      const handleBoardDragOver = (event) => {
+        if (!draggedFiles(event)) return
+        event.preventDefault()
+        event.stopPropagation()
+        if (event.dataTransfer !== undefined && event.dataTransfer !== null) event.dataTransfer.dropEffect = 'copy'
+        const id = dragTargetId(event)
+        if (id === dragSessionRef.current) return
+        dragSessionRef.current = id
+        setDragSessionId(id)
+      }
+
+      const handleBoardDragLeave = (event) => {
+        if (!draggedFiles(event)) return
+        if (event.currentTarget !== null && event.currentTarget.contains(event.relatedTarget)) return
+        clearDragTarget()
+      }
+
+      const board = h(React.Fragment, null,
         h('style', { key: 'css', dangerouslySetInnerHTML: { __html: CSS } }),
-        h('div', { key: 'board', className: 'dshtb-layer', role: 'dialog', 'aria-modal': 'true', 'aria-label': t('title') },
+        h('div', {
+          key: 'board',
+          className: 'dshtb-layer',
+          role: 'dialog',
+          'aria-modal': 'true',
+          'aria-label': t('title'),
+          // A drop that misses a card must not fall through to the shell's
+          // document-level composer intake hidden behind the board.
+          onDragEnter: handleBoardDragEnter,
+          onDragOver: handleBoardDragOver,
+          onDragLeave: handleBoardDragLeave,
+          onDropCapture: clearDragTarget,
+          onDrop: (event) => {
+            if (!draggedFiles(event)) return
+            event.preventDefault()
+            event.stopPropagation()
+            clearDragTarget()
+          },
+        },
           h('div', { className: 'dshtb-top' },
             h('div', { className: 'dshtb-topTitle' },
               h('span', { className: 'dshtb-title' }, t('title')),
@@ -1608,6 +1945,7 @@ window.__ModuleLoader__.load({
               selected: selected.has(row.summary.id),
               approval: approvalOf(row.summary.id),
               pinned: pinnedOrder.has(row.summary.id),
+              dragOver: dragSessionId === row.summary.id,
               sessions: props.sessions,
               now,
               t,
@@ -1626,6 +1964,12 @@ window.__ModuleLoader__.load({
               }, t('more', { n: visible.length - limit })))
             : null),
           renderDeleteDialog()))
+
+      return typeof createPortal === 'function'
+        && typeof document !== 'undefined' && document !== null
+        && document.body !== undefined && document.body !== null
+        ? createPortal(board, document.body)
+        : board
     }
 
     // ── sidebar launcher ──
@@ -1736,7 +2080,7 @@ window.__ModuleLoader__.load({
 .dshtb-launch:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
 .dshtb-launch-label{white-space:nowrap}
 .dshtb-badge{min-width:16px;height:16px;padding:0 4px;border-radius:999px;background:var(--dsw-alias-state-success-primary);color:#fff;font-size:10px;line-height:16px;text-align:center;flex:none}
-.dshtb-layer{position:fixed;top:var(--dsh-frame-chrome-top,var(--dsh-frame-top-clearance,0px));right:0;bottom:0;left:0;z-index:60;display:flex;flex-direction:column;background:var(--dsw-alias-bg-base);pointer-events:auto;font-family:var(--dsw-font-family)}
+.dshtb-layer{position:fixed;top:var(--dsh-frame-chrome-top,var(--dsh-frame-top-clearance,0px));right:0;bottom:0;left:0;z-index:1001;display:flex;flex-direction:column;background:var(--dsw-alias-bg-base);pointer-events:auto;font-family:var(--dsw-font-family)}
 .dshtb-top{display:flex;align-items:center;gap:16px;padding:0 20px;height:56px;flex:none;border-bottom:1px solid var(--dsw-alias-border-l1);min-width:0}
 .dshtb-topTitle{display:flex;align-items:baseline;gap:10px;min-width:0;flex:1 1 auto;overflow:hidden}
 .dshtb-title{font-size:15px;font-weight:500;line-height:24px;color:var(--dsw-alias-label-primary);white-space:nowrap}
@@ -1779,6 +2123,11 @@ window.__ModuleLoader__.load({
 .dshtb-card{position:relative;box-sizing:border-box;display:flex;flex-direction:column;width:100%;height:100%;min-height:120px;border:1px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-layer-1);box-shadow:0 2px 6px rgba(0,0,0,.10),0 1px 2px rgba(0,0,0,.06);overflow:hidden;transition:border-color var(--ds-transition-duration-fast) var(--ds-ease-in-out),box-shadow var(--ds-transition-duration-fast) var(--ds-ease-in-out);container-type:inline-size}
 .dshtb-card:hover{border-color:var(--dsw-alias-border-l3)}
 .dshtb-cardWrap[data-snap] .dshtb-card,.dshtb-card[data-selected=true]{border-color:var(--dsw-alias-brand-primary);box-shadow:0 0 0 1px var(--dsw-alias-brand-primary),0 2px 8px rgba(0,0,0,.14)}
+.dshtb-card[data-drop=true]{border-color:var(--dsw-alias-brand-primary);box-shadow:0 0 0 1px var(--dsw-alias-brand-primary),0 2px 8px rgba(0,0,0,.14)}
+.dshtb-dropCue{position:absolute;inset:0;z-index:5;display:flex;align-items:center;justify-content:center;border:2px dashed var(--dsw-alias-brand-primary);border-radius:inherit;background:color-mix(in srgb,var(--dsw-alias-brand-primary) 12%,transparent);color:var(--dsw-alias-brand-primary);font-size:12px;font-weight:500;pointer-events:none}
+.dshtb-uploadNotice{flex:none;padding:4px 10px;border-bottom:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);font-size:11px;line-height:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dshtb-uploadNotice-ok{color:var(--dsw-alias-state-success-primary)}
+.dshtb-uploadNotice-error{color:var(--dsw-alias-state-error-primary)}
 .dshtb-cardHead{display:flex;align-items:center;gap:8px;padding:8px 10px;flex:none;border-bottom:1px solid var(--dsw-alias-border-l1)}
 .dshtb-check{width:14px;height:14px;margin:0;flex:none;accent-color:var(--dsw-alias-brand-primary);cursor:pointer}
 .dshtb-state{display:inline-flex;align-items:center;gap:4px;flex:none}
@@ -1853,6 +2202,7 @@ window.__ModuleLoader__.load({
 .dshtb-body>.dshtb-empty{align-self:center;margin:auto 0}
 .dshtb-gridEmpty{flex:1 0 100%;min-height:160px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px}
 .dshtb-send{display:flex;align-items:flex-end;gap:6px;padding:6px 28px 6px 8px;flex:none;border-top:1px solid var(--dsw-alias-border-l1)}
+.dshtb-attachChip{flex:none;align-self:center;padding:2px 7px;border-radius:999px;background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-secondary);font-size:11px;line-height:16px;white-space:nowrap;cursor:default}
 .dshtb-input{box-sizing:border-box;flex:1;min-width:0;min-height:24px;max-height:96px;padding:4px 8px;border:0.5px solid transparent;border-radius:999px;background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:16px;resize:none;overflow-y:auto;scrollbar-width:none;-ms-overflow-style:none;white-space:pre-wrap;overflow-wrap:anywhere;outline:none}
 .dshtb-input::-webkit-scrollbar{width:0;height:0;display:none}
 .dshtb-input::placeholder{color:var(--dsw-alias-label-tertiary)}
@@ -1891,7 +2241,7 @@ window.__ModuleLoader__.load({
       inject: ['slots', 'locale', 'sessions', 'uiWorkspace', 'remote', 'remote.commands'],
       // Offline render harness seam (tools/render-test.mjs); the Host only uses
       // `inject` and `apply`.
-      __test: { summarize, questionText, answerText, MarkdownText },
+      __test: { summarize, questionText, answerText, MarkdownText, filesFromList, attachFilesToSession },
       apply(ctx) {
         ctx.effect(() => ctx.locale.register(NS, {
           zh: {
@@ -1940,6 +2290,15 @@ window.__ModuleLoader__.load({
             userOnly: '仅用户',
             clarifySkipped: '已跳过',
             clarifyAnswerLine: '{label}：{answer}',
+            dropFiles: '松开鼠标，上传到该对话',
+            uploadingFiles: '正在上传 {n} 个附件…',
+            attachmentsUploading: '附件还在上传，请稍候',
+            filesAttached: '已添加 {n} 个附件到对话',
+            uploadFailed: '上传失败：{message}',
+            uploadFailedCount: '{n} 个附件上传失败，可到会话输入框重试',
+            uploadBlocked: '当前对话暂时不能接收附件',
+            uploadUnavailable: '此会话不支持附件上传',
+            attachments: '{n} 个附件',
             tool: '工具',
             approvalWaiting: '等待权限审批：{tool}',
             allowOnce: '允许一次',
@@ -2015,6 +2374,15 @@ window.__ModuleLoader__.load({
             userOnly: 'User only',
             clarifySkipped: 'Skipped',
             clarifyAnswerLine: '{label}: {answer}',
+            dropFiles: 'Drop to upload to this conversation',
+            uploadingFiles: 'Uploading {n} attachment(s)…',
+            attachmentsUploading: 'Attachments are still uploading',
+            filesAttached: 'Added {n} attachment(s) to the conversation',
+            uploadFailed: 'Upload failed: {message}',
+            uploadFailedCount: '{n} attachment(s) failed to upload; retry in the session composer',
+            uploadBlocked: 'This conversation cannot accept attachments right now',
+            uploadUnavailable: 'Attachments are not available for this session',
+            attachments: '{n} attachment(s)',
             tool: 'tool',
             approvalWaiting: 'Waiting for permission: {tool}',
             allowOnce: 'Allow once',
