@@ -19,13 +19,15 @@ window.__ModuleLoader__.load({
     try { createPortal = require('react-dom').createPortal } catch (_error) { createPortal = undefined }
 
     const NS = 'task-board'
+    // Client identity sent with account Remote calls; keep in step with package.json.
+    const CLIENT_VERSION = '0.14.0'
     const INITIAL_VISIBLE = 12
     const SNAP_DISTANCE = 8
     const DEFAULT_CARD = { w: 380, h: 250 }
     const MIN_CARD = { w: 260, h: 180 }
     const MAX_CARD = { w: 960, h: 720 }
-    const STATUSES = ['todo', 'doing', 'done']
-    const STATUS_RANK = { doing: 0, todo: 1, done: 2 }
+    const STATUSES = ['doing', 'done', 'todo']
+    const STATUS_RANK = { doing: 0, done: 1, todo: 2 }
     const SIZE_STORAGE = 'dsh.task-board.card-size.v1'
 
     // ── shared open flag (the launcher and the overlay live in two slots) ──
@@ -573,12 +575,208 @@ window.__ModuleLoader__.load({
       return minutes === 0 ? `${seconds}s` : `${minutes}m ${String(seconds).padStart(2, '0')}s`
     }
 
+    // ── account balance ──
+    /** Platform-style currency text: two decimals, grouped, sub-cent and negative edges. */
+    function formatMoney(amount, currency) {
+      const symbol = currency === 'CNY' ? '¥' : '$'
+      const value = Number(amount)
+      if (!Number.isFinite(value)) return `${symbol}${String(amount)}`
+      if (value === 0) return `${symbol}0.00`
+      const abs = Math.abs(value)
+      if (abs < 0.01) return value < 0 ? `-${symbol}0.01` : `<${symbol}0.01`
+      const floored = Math.floor(abs * 100) / 100
+      const text = floored.toLocaleString(undefined, {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      })
+      return `${value < 0 ? '-' : ''}${symbol}${text}`
+    }
+
+    /** One-line balance summary; the bonus wallets stand in when no recharge wallet exists. */
+    function formatBalanceSummary(balance) {
+      if (balance === null || balance === undefined) return ''
+      const main = Array.isArray(balance.wallets) ? balance.wallets : []
+      const wallets = main.length > 0 ? main : (Array.isArray(balance.bonusWallets) ? balance.bonusWallets : [])
+      return wallets.map(wallet => formatMoney(wallet.balance, wallet.currency)).join(' · ')
+    }
+
+    // ── pending ask_user_question ──
+    /**
+     * Build the answer batch for a pending question card.
+     * @param questions - the pending batch.
+     * @param selected - question id → chosen option labels.
+     * @param custom - question id → typed answer.
+     * @param skipAll - send every question as skipped instead.
+     * @returns the batch, or null when a question has neither a choice nor text.
+     */
+    function buildQuestionAnswers(questions, selected, custom, skipAll) {
+      const answers = []
+      for (const question of questions) {
+        const chosen = Array.isArray(selected[question.id]) ? selected[question.id] : []
+        const text = skipAll === true ? '' : String(custom[question.id] ?? '').trim()
+        if (skipAll !== true && chosen.length === 0 && text === '') return null
+        const answer = {
+          id: question.id,
+          selected: text !== '' && question.multiSelect !== true ? [] : chosen,
+        }
+        if (text !== '') answer.custom = text
+        answers.push(answer)
+      }
+      return answers
+    }
+
+    /**
+     * Inline answer surface for the live `ask_user_question` pending interaction.
+     * The card settles the same waterfall/Remote channel as the composer question
+     * panel, so answering here does not need to open the Session.
+     */
+    function QuestionPanel({ pending, t }) {
+      const questions = Array.isArray(pending.questions) ? pending.questions : []
+      const [selected, setSelected] = React.useState({})
+      const [custom, setCustom] = React.useState({})
+      const [busy, setBusy] = React.useState(false)
+      const [error, setError] = React.useState('')
+
+      React.useEffect(() => {
+        setSelected({})
+        setCustom({})
+        setBusy(false)
+        setError('')
+      }, [pending.key])
+
+      const choose = (question, label) => {
+        if (busy) return
+        setSelected((previous) => {
+          const current = Array.isArray(previous[question.id]) ? previous[question.id] : []
+          if (question.multiSelect === true) {
+            const next = current.includes(label)
+              ? current.filter(item => item !== label)
+              : [...current, label]
+            return { ...previous, [question.id]: next }
+          }
+          return { ...previous, [question.id]: [label] }
+        })
+        if (question.multiSelect !== true) {
+          setCustom(previous => ({ ...previous, [question.id]: '' }))
+        }
+        setError('')
+      }
+
+      const typeAnswer = (question, value) => {
+        if (busy) return
+        setCustom(previous => ({ ...previous, [question.id]: value }))
+        if (question.multiSelect !== true && value !== '') {
+          setSelected(previous => ({ ...previous, [question.id]: [] }))
+        }
+        setError('')
+      }
+
+      const submit = async (skipAll) => {
+        if (busy) return
+        const answers = buildQuestionAnswers(questions, selected, custom, skipAll)
+        if (answers === null) {
+          setError(t('questionAnswerAll'))
+          return
+        }
+        setBusy(true)
+        setError('')
+        try {
+          await pending.answer({ answers })
+          // A continued question keeps its RPC card published until the panel is
+          // dismissed; the composer does the same after an accepted late answer.
+          if (typeof pending.snapshot === 'function' && pending.snapshot().channel === 'rpc'
+            && typeof pending.dismiss === 'function') {
+            try { void pending.dismiss().catch(() => {}) } catch (_error) { /* the card is already gone */ }
+          }
+        } catch (cause) {
+          setError(cause instanceof Error ? cause.message : String(cause))
+          setBusy(false)
+        }
+      }
+
+      return h('div', {
+        className: 'dshtb-question',
+        role: 'group',
+        'aria-label': t('questionWaiting'),
+      },
+      h('div', { className: 'dshtb-questionTitle' }, t('questionWaiting')),
+      h('div', { className: 'dshtb-questionList' }, questions.map((question, index) => {
+        const chosen = Array.isArray(selected[question.id]) ? selected[question.id] : []
+        const options = Array.isArray(question.options) ? question.options : []
+        return h('div', { key: question.id ?? `q-${index}`, className: 'dshtb-questionItem' },
+          question.header !== undefined && question.header !== ''
+            ? h('div', { className: 'dshtb-questionHeader' }, question.header)
+            : null,
+          h('div', { className: 'dshtb-questionText' }, question.question),
+          options.length === 0
+            ? null
+            : h('div', { className: 'dshtb-options' }, options.map((option, optionIndex) => {
+              const on = chosen.includes(option.label)
+              return h('button', {
+                key: `${option.label ?? optionIndex}-${optionIndex}`,
+                type: 'button',
+                className: `dshtb-option${on ? ' on' : ''}`,
+                'aria-pressed': on,
+                onClick: (event) => {
+                  event.stopPropagation()
+                  choose(question, option.label)
+                },
+              },
+              h('span', { className: 'dshtb-optionLabel' }, option.label),
+              option.description !== undefined && option.description !== ''
+                ? h('span', { className: 'dshtb-optionDesc' }, option.description)
+                : null)
+            })),
+          h('input', {
+            className: 'dshtb-questionCustom',
+            value: custom[question.id] ?? '',
+            placeholder: t('questionCustom'),
+            'aria-label': t('questionCustom'),
+            onChange: (event) => typeAnswer(question, event.target.value),
+            onKeyDown: (event) => {
+              if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault()
+                void submit(false)
+              }
+            },
+          }))
+      })),
+      error === '' ? null : h('div', { className: 'dshtb-questionError', role: 'alert' }, error),
+      h('div', { className: 'dshtb-questionActions' },
+        h('button', {
+          type: 'button',
+          className: 'dshtb-questionSkip',
+          disabled: busy,
+          onClick: (event) => {
+            event.stopPropagation()
+            void submit(true)
+          },
+        }, t('questionSkip')),
+        h('button', {
+          type: 'button',
+          className: 'dshtb-questionSubmit',
+          disabled: busy,
+          onClick: (event) => {
+            event.stopPropagation()
+            void submit(false)
+          },
+        }, busy ? '…' : t('questionSubmit')))
+      )
+    }
+
     // ── one Session card ──
     function Card(props) {
       const {
-        sessionId, summary, status, workspace, size, selecting, selected, approval, pinned, dragOver,
+        sessionId, summary, status, workspace, size, selecting, selected, interaction, pinned, dragOver,
         t, sessions, now, onOpen, onToggleSelect, onTogglePin, onResize, onResetSize,
       } = props
+      const approval = interaction !== null && interaction !== undefined && interaction.kind === 'approval'
+        ? interaction
+        : null
+      const question = interaction !== null && interaction !== undefined
+        && interaction.kind === 'question' && interaction.review === undefined
+        ? interaction
+        : null
       const [state, setState] = React.useState(null)
       const [userOnly, setUserOnly] = React.useState(false)
       const [draft, setDraft] = React.useState('')
@@ -1180,6 +1378,9 @@ window.__ModuleLoader__.load({
           setUserOnly(true)
         },
       }, t('userOnly'))),
+      question === null || readOnly
+        ? null
+        : h(QuestionPanel, { key: question.key ?? 'question', pending: question, t }),
       uploadNotice === null
         ? null
         : h('div', {
@@ -1350,11 +1551,37 @@ window.__ModuleLoader__.load({
       const [revealSessionId, setRevealSessionId] = React.useState(null)
       const [showSubagents, setShowSubagents] = React.useState(false)
       const [dragSessionId, setDragSessionId] = React.useState(null)
+      const [balance, setBalance] = React.useState(null)
       const dragSessionRef = React.useRef(null)
+      const balanceReaderRef = React.useRef(props.readBalance)
+      balanceReaderRef.current = props.readBalance
       const gridRef = React.useRef(null)
       const creatingRef = React.useRef(false)
       const deletingRef = React.useRef(false)
       const t = props.t
+
+      // Refresh the account balance when the board opens and once a minute while
+      // it stays open; a missing or unauthorized account Remote just hides it.
+      React.useEffect(() => {
+        if (!open) {
+          setBalance(null)
+          return undefined
+        }
+        let live = true
+        const read = async () => {
+          const reader = balanceReaderRef.current
+          if (typeof reader !== 'function') return
+          let next = null
+          try { next = await reader() } catch (_error) { next = null }
+          if (live) setBalance(next)
+        }
+        void read()
+        const timer = window.setInterval(() => { void read() }, 60e3)
+        return () => {
+          live = false
+          window.clearInterval(timer)
+        }
+      }, [open])
 
       React.useEffect(() => {
         if (!open) return undefined
@@ -1528,9 +1755,9 @@ window.__ModuleLoader__.load({
       const limit = shown
       const displayed = visible.slice(0, limit)
 
-      const approvalOf = (sessionId) => {
+      const interactionOf = (sessionId) => {
         const pending = sessionStatuses.get(sessionId)?.pendingInteraction
-        return pending !== undefined && pending.kind === 'approval' ? pending : null
+        return pending === undefined || pending === null ? null : pending
       }
 
       const toggleSelected = (sessionId) => {
@@ -1754,6 +1981,14 @@ window.__ModuleLoader__.load({
 
       if (!open) return null
 
+      const balanceText = formatBalanceSummary(balance)
+      const bonusText = balance === null || !Array.isArray(balance.bonusWallets)
+        ? ''
+        : balance.bonusWallets
+          .filter(wallet => Number(wallet.balance) > 0)
+          .map(wallet => formatMoney(wallet.balance, wallet.currency))
+          .join(' · ')
+
       const dragTargetId = (event) => {
         const target = event.target
         if (target === null || target === undefined || typeof target.closest !== 'function') return null
@@ -1850,6 +2085,14 @@ window.__ModuleLoader__.load({
                   onClick: toggleSubagents,
                 }, t('subagents'), h('span', { className: 'dshtb-subagentsCount' }, String(subagents.length)))
                 : null,
+              balanceText === ''
+                ? null
+                : h('span', {
+                  className: 'dshtb-balance',
+                  title: bonusText === ''
+                    ? t('balanceHint')
+                    : `${t('balanceHint')} · ${t('balanceBonus', { amount: bonusText })}`,
+                }, balanceText),
               h('input', {
                 className: 'dshtb-search',
                 value: query,
@@ -1943,7 +2186,7 @@ window.__ModuleLoader__.load({
               size: resolveCardSize(cardSizes[row.summary.id]),
               selecting,
               selected: selected.has(row.summary.id),
-              approval: approvalOf(row.summary.id),
+              interaction: interactionOf(row.summary.id),
               pinned: pinnedOrder.has(row.summary.id),
               dragOver: dragSessionId === row.summary.id,
               sessions: props.sessions,
@@ -2095,6 +2338,7 @@ window.__ModuleLoader__.load({
 .dshtb-subagents:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
 .dshtb-subagents.on{background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-primary)}
 .dshtb-subagentsCount{min-width:15px;height:15px;padding:0 3px;border-radius:999px;background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-tertiary);font-size:10px;line-height:15px;text-align:center}
+.dshtb-balance{flex:none;height:24px;display:inline-flex;align-items:center;padding:0 9px;border-radius:999px;background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-primary);font-size:11px;line-height:24px;font-variant-numeric:tabular-nums;white-space:nowrap;cursor:default}
 .dshtb-search{box-sizing:border-box;width:200px;height:28px;padding:0 10px;border:0.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-sm);background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;outline:none}
 .dshtb-search::placeholder{color:var(--dsw-alias-label-tertiary)}
 .dshtb-search:focus{border-color:var(--dsw-alias-brand-primary)}
@@ -2128,12 +2372,33 @@ window.__ModuleLoader__.load({
 .dshtb-uploadNotice{flex:none;padding:4px 10px;border-bottom:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);font-size:11px;line-height:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dshtb-uploadNotice-ok{color:var(--dsw-alias-state-success-primary)}
 .dshtb-uploadNotice-error{color:var(--dsw-alias-state-error-primary)}
+.dshtb-question{flex:none;max-height:46%;overflow:hidden;padding:6px 10px 7px;display:flex;flex-direction:column;gap:6px;border-bottom:1px solid var(--dsw-alias-border-l1);background:color-mix(in srgb,var(--dsw-alias-brand-primary) 6%,transparent)}
+.dshtb-questionList{min-height:0;overflow:auto;display:flex;flex-direction:column;gap:6px}
+.dshtb-questionTitle{font-size:10px;font-weight:600;letter-spacing:.02em;text-transform:uppercase;color:var(--dsw-alias-brand-primary)}
+.dshtb-questionItem{display:flex;flex-direction:column;gap:4px}
+.dshtb-questionHeader{font-size:11px;font-weight:600;line-height:15px;color:var(--dsw-alias-label-primary)}
+.dshtb-questionText{font-size:12px;line-height:1.45;color:var(--dsw-alias-label-primary);overflow-wrap:anywhere}
+.dshtb-options{display:flex;flex-direction:column;gap:4px}
+.dshtb-option{display:flex;flex-direction:column;align-items:flex-start;gap:1px;padding:4px 7px;border:0.5px solid var(--dsw-alias-border-l3);border-radius:6px;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:11px;line-height:1.4;text-align:left;cursor:pointer}
+.dshtb-option:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.dshtb-option.on{border-color:var(--dsw-alias-brand-primary);background:color-mix(in srgb,var(--dsw-alias-brand-primary) 12%,transparent)}
+.dshtb-optionDesc{font-size:10px;line-height:1.4;color:var(--dsw-alias-label-tertiary)}
+.dshtb-questionCustom{box-sizing:border-box;width:100%;height:24px;padding:0 7px;border:0.5px solid var(--dsw-alias-border-l3);border-radius:5px;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:11px;outline:none}
+.dshtb-questionCustom::placeholder{color:var(--dsw-alias-label-tertiary)}
+.dshtb-questionCustom:focus{border-color:var(--dsw-alias-brand-primary)}
+.dshtb-questionError{font-size:10px;line-height:1.4;color:var(--dsw-alias-state-error-primary)}
+.dshtb-questionActions{display:flex;justify-content:flex-end;gap:6px}
+.dshtb-questionSkip,.dshtb-questionSubmit{height:22px;padding:0 10px;border-radius:var(--dsw-radius-sm);font:inherit;font-size:11px;cursor:pointer;white-space:nowrap}
+.dshtb-questionSkip{border:0.5px solid var(--dsw-alias-border-l3);background:transparent;color:var(--dsw-alias-label-secondary)}
+.dshtb-questionSkip:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.dshtb-questionSubmit{border:0;background:var(--dsw-alias-brand-primary);color:#fff}
+.dshtb-questionSkip:disabled,.dshtb-questionSubmit:disabled{opacity:.55;cursor:default}
 .dshtb-cardHead{display:flex;align-items:center;gap:8px;padding:8px 10px;flex:none;border-bottom:1px solid var(--dsw-alias-border-l1)}
 .dshtb-check{width:14px;height:14px;margin:0;flex:none;accent-color:var(--dsw-alias-brand-primary);cursor:pointer}
 .dshtb-state{display:inline-flex;align-items:center;gap:4px;flex:none}
 .dshtb-stateDot{width:7px;height:7px;border-radius:50%;background:var(--dsw-alias-state-idle-primary);flex:none}
 .dshtb-state[data-status=doing] .dshtb-stateDot{background:var(--dsw-alias-state-success-primary);animation:dshtb-pulse 1.6s ease-in-out infinite}
-.dshtb-state[data-status=done] .dshtb-stateDot{background:var(--dsw-alias-brand-primary)}
+.dshtb-state[data-status=done] .dshtb-stateDot{background:var(--dsw-alias-state-error-primary)}
 .dshtb-stateLabel{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:1;white-space:nowrap;max-width:64px;overflow:hidden;text-overflow:ellipsis}
 .dshtb-cardTitle{flex:1;min-width:0;border:0;background:transparent;padding:0;text-align:left;font:inherit;font-size:13px;font-weight:500;line-height:20px;color:var(--dsw-alias-label-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:text}
 .dshtb-cardTitle:hover{color:var(--dsw-alias-brand-primary)}
@@ -2241,8 +2506,17 @@ window.__ModuleLoader__.load({
       inject: ['slots', 'locale', 'sessions', 'uiWorkspace', 'remote', 'remote.commands'],
       // Offline render harness seam (tools/render-test.mjs); the Host only uses
       // `inject` and `apply`.
-      __test: { summarize, questionText, answerText, MarkdownText, filesFromList, attachFilesToSession },
+      __test: { summarize, questionText, answerText, MarkdownText, filesFromList, attachFilesToSession, buildQuestionAnswers, formatMoney, formatBalanceSummary },
       apply(ctx) {
+        // Optional: the account Remote is part of the Web base, but a profile
+        // without it must still load this plugin — the balance chip just stays hidden.
+        let accountRemote
+        if (typeof ctx.inject === 'function') {
+          ctx.inject(['remote.account'], (scope) => {
+            accountRemote = scope.remote.account
+            scope.effect(() => () => { accountRemote = undefined }, 'task-board.account')
+          })
+        }
         ctx.effect(() => ctx.locale.register(NS, {
           zh: {
             open: '任务大屏',
@@ -2299,6 +2573,13 @@ window.__ModuleLoader__.load({
             uploadBlocked: '当前对话暂时不能接收附件',
             uploadUnavailable: '此会话不支持附件上传',
             attachments: '{n} 个附件',
+            questionWaiting: '助手提问',
+            questionSubmit: '提交',
+            questionSkip: '跳过',
+            questionCustom: '自定义答案（可选）',
+            questionAnswerAll: '请为每个问题选择或填写答案',
+            balanceHint: '账户余额',
+            balanceBonus: '含赠送 {amount}',
             tool: '工具',
             approvalWaiting: '等待权限审批：{tool}',
             allowOnce: '允许一次',
@@ -2383,6 +2664,13 @@ window.__ModuleLoader__.load({
             uploadBlocked: 'This conversation cannot accept attachments right now',
             uploadUnavailable: 'Attachments are not available for this session',
             attachments: '{n} attachment(s)',
+            questionWaiting: 'Assistant question',
+            questionSubmit: 'Submit',
+            questionSkip: 'Skip',
+            questionCustom: 'Custom answer (optional)',
+            questionAnswerAll: 'Choose or type an answer for every question',
+            balanceHint: 'Account balance',
+            balanceBonus: 'Bonus {amount}',
             tool: 'tool',
             approvalWaiting: 'Waiting for permission: {tool}',
             allowOnce: 'Allow once',
@@ -2431,6 +2719,28 @@ window.__ModuleLoader__.load({
             const outcome = result.value?.result
             if (outcome === undefined) throw new Error('delete-session returned no result')
             if (outcome.kind === 'error') throw new Error(outcome.text)
+          },
+          readBalance: async () => {
+            try {
+              const account = accountRemote !== undefined && accountRemote !== null
+                ? accountRemote
+                : (ctx.remote === undefined || ctx.remote === null ? undefined : ctx.remote.account)
+              if (account === undefined || account === null || typeof account.getBalance !== 'function') return null
+              const result = await account.getBalance({
+                version: CLIENT_VERSION,
+                locale: ctx.locale.getSnapshot().active,
+                timezoneOffsetSeconds: -new Date().getTimezoneOffset() * 60,
+              })
+              if (result === undefined || result === null || result.ok !== true) return null
+              const value = result.value
+              if (value === null || value === undefined || value.status !== 'ready') return null
+              return {
+                wallets: Array.isArray(value.value) ? value.value : [],
+                bonusWallets: Array.isArray(value.bonusWallets) ? value.bonusWallets : [],
+              }
+            } catch (_error) {
+              return null
+            }
           },
           openSession: (sessionId) => {
             setOpen(false)

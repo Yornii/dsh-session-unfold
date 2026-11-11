@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Session Tiling",
-    "description": "Session tiling with one card per Session, user and Markdown assistant messages, the assistant's clarifying questions with the user's answers, drag-and-drop file uploads into a Session's draft, sidebar-consistent pinning, a read-only subagent window toggle, a user-only filter, inline new-window creation, permanent batch deletion, approvals and snapping cards."
+    "description": "Session tiling with one card per Session, user and Markdown assistant messages, questions answerable right on the card, drag-and-drop file uploads into a Session's draft, an account balance in the header, sidebar-consistent pinning, a read-only subagent window toggle, a user-only filter, inline new-window creation, permanent batch deletion, approvals and snapping cards."
   }
 }

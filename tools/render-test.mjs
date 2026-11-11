@@ -104,6 +104,12 @@ const value = mod
 // Grab the registered components by intercepting ctx.slots.register.
 let Board, Launcher
 const ctx = {
+  // The balance hook optionally injects `remote.account`; this fake has none,
+  // which is the signed-out/unavailable path.
+  inject: (_deps, callback) => {
+    callback({ remote: { account: undefined }, effect: (fn) => fn() })
+    return () => {}
+  },
   locale: { register: () => () => {}, bind: () => (key, params) => {
     const dict = { subtitle: `${params ? params.total : ''} 个任务`, title: '任务大屏' }
     return dict[key] ?? key
@@ -160,6 +166,9 @@ const t = (key, params) => {
     uploadFailed: 'Upload failed: {message}', uploadFailedCount: '{n} attachment(s) failed to upload',
     uploadBlocked: 'This conversation cannot accept attachments', uploadUnavailable: 'Attachments are not available',
     attachments: '{n} attachment(s)',
+    questionWaiting: 'Assistant question', questionSubmit: 'Submit', questionSkip: 'Skip',
+    questionCustom: 'Custom answer (optional)', questionAnswerAll: 'Choose or type an answer for every question',
+    balanceHint: 'Account balance', balanceBonus: 'Bonus {amount}',
     tool: 'tool', approvalWaiting: 'Waiting: {tool}',
     allowOnce: 'Allow once', reject: 'Reject', approvalFailed: 'Approval failed',
     noSessions: 'No tasks', noMatch: 'No matches', loadingCard: 'Loading…', loadFailed: 'Load failed',
@@ -172,9 +181,23 @@ const t = (key, params) => {
   return out
 }
 
+const pendingQuestion = {
+  kind: 'question',
+  key: 'question:s|c',
+  sessionId: 'c',
+  questions: [{
+    id: 'window',
+    header: 'Release window',
+    question: 'When should it ship?',
+    options: [{ label: 'Option A', description: 'tonight' }, { label: 'Option B' }],
+  }],
+  answer: async () => {},
+}
 const sessionStatus = new Map([
   ['a', { running: true, pendingInteraction: undefined, completionUnread: false }],
   ['b', { running: false, pendingInteraction: undefined, completionUnread: true }],
+  ['d', { running: false, pendingInteraction: undefined, completionUnread: true }],
+  ['c', { running: false, pendingInteraction: pendingQuestion, completionUnread: false }],
 ])
 const props = {
   t,
@@ -219,7 +242,7 @@ console.log('HAS_AUTO_DONE:', boardHtml.includes('data-status="done"'))
 // ---- clarification folding (questions live in tool/call, answers in tool/result) ----
 // The board body fills from `useEffect`, which static rendering skips, so the
 // timeline is asserted against the module's own folding seam instead.
-const { summarize, answerText, MarkdownText, filesFromList, attachFilesToSession } = value.__test
+const { summarize, answerText, MarkdownText, filesFromList, attachFilesToSession, buildQuestionAnswers, formatMoney, formatBalanceSummary } = value.__test
 const folded = summarize(windows.get('c'))
 const questionItem = folded.items.find(item => item.clarify === true && item.kind === 'assistant')
 const answerItem = folded.items.find(item => item.clarify === true && item.kind === 'user')
@@ -258,6 +281,27 @@ const attachFailed = attachFilesToSession(
 )
 const attachUnavailable = attachFilesToSession({ scope: () => ({ get: () => undefined }) }, 'a', [{ name: 'x.txt', size: 1 }], undefined)
 console.log('ATTACH_OK:', JSON.stringify(attachOk.ok), attachCalls.join(','), 'RELEASED:', releasedDrafts.join(','))
+
+// ---- pending ask_user_question answers ----
+const askQuestions = [
+  { id: 'q1', question: 'Pick one', options: [{ label: 'A' }, { label: 'B' }] },
+  { id: 'q2', question: 'Pick many', multiSelect: true, options: [{ label: 'X' }, { label: 'Y' }] },
+]
+const answerSingle = buildQuestionAnswers(askQuestions, { q1: ['A'], q2: ['X', 'Y'] }, {}, false)
+const answerCustom = buildQuestionAnswers([{ id: 'q1', question: 'Free', options: [{ label: 'A' }] }], { q1: ['A'] }, { q1: 'typed' }, false)
+const answerMultiCustom = buildQuestionAnswers([askQuestions[1]], { q2: ['X'] }, { q2: 'extra' }, false)
+const answerMissing = buildQuestionAnswers(askQuestions, { q1: ['A'] }, {}, false)
+const answerSkipped = buildQuestionAnswers(askQuestions, {}, {}, true)
+console.log('ANSWERS:', JSON.stringify({ answerSingle, answerCustom, answerMissing }))
+
+// ---- account balance formatting ----
+const moneyZero = formatMoney('0', 'USD')
+const moneySubCent = formatMoney('0.001', 'CNY')
+const moneyFloor = formatMoney('12.345', 'CNY')
+const moneySummary = formatBalanceSummary({ wallets: [{ currency: 'CNY', balance: '5' }], bonusWallets: [] })
+const moneyBonus = formatBalanceSummary({ wallets: [], bonusWallets: [{ currency: 'USD', balance: '1' }] })
+const moneyNone = formatBalanceSummary(null)
+console.log('MONEY:', JSON.stringify({ moneyZero, moneySubCent, moneyFloor, moneySummary }))
 console.log('CLARIFY_QUESTION_HTML:', questionHtml)
 console.log('CLARIFY_ANSWER:', JSON.stringify(answer))
 
@@ -292,9 +336,29 @@ if (attachUnavailable.ok !== false || attachUnavailable.reason !== 'unavailable'
 if (!source.includes('createDrafts') || !source.includes('addAttachments')) failures.push('dropped files are not routed through the conversation service')
 if (!source.includes('dshtb-dropCue') || !source.includes('dshtb-attachChip')) failures.push('drop handling UI missing')
 if (!source.includes('createPortal') || !source.includes('z-index:1001')) failures.push('board is not lifted above the host drag mask')
+if (!source.includes('function QuestionPanel') || !source.includes('pending.answer')) failures.push('question answer panel missing')
+if (!source.includes('dshtb-questionSubmit')) failures.push('question submit control missing')
+if (!boardHtml.includes('Assistant question') || !boardHtml.includes('Option A') || !boardHtml.includes('dshtb-questionSubmit')) failures.push('pending question panel is not rendered on the card')
+if (JSON.stringify(answerSingle) !== '[{"id":"q1","selected":["A"]},{"id":"q2","selected":["X","Y"]}]') failures.push(`single/multi answer batch is wrong: ${JSON.stringify(answerSingle)}`)
+if (JSON.stringify(answerCustom) !== '[{"id":"q1","selected":[],"custom":"typed"}]') failures.push(`custom answer does not override the choice: ${JSON.stringify(answerCustom)}`)
+if (JSON.stringify(answerMultiCustom) !== '[{"id":"q2","selected":["X"],"custom":"extra"}]') failures.push(`multi-select custom answer is wrong: ${JSON.stringify(answerMultiCustom)}`)
+if (answerMissing !== null) failures.push('unanswered question does not block submit')
+if (JSON.stringify(answerSkipped) !== '[{"id":"q1","selected":[]},{"id":"q2","selected":[]}]') failures.push('skip-all batch is wrong')
+if (moneyZero !== '$0.00') failures.push(`zero balance is wrong: ${moneyZero}`)
+if (moneySubCent !== '<¥0.01') failures.push(`sub-cent balance is wrong: ${moneySubCent}`)
+if (moneyFloor !== '¥12.34') failures.push(`balance is not floored to cents: ${moneyFloor}`)
+if (moneySummary !== '¥5.00') failures.push(`balance summary is wrong: ${moneySummary}`)
+if (moneyBonus !== '$1.00') failures.push(`bonus-only summary is wrong: ${moneyBonus}`)
+if (moneyNone !== '') failures.push('missing balance should render nothing')
+if (!source.includes('readBalance') || !source.includes('dshtb-balance')) failures.push('top-bar balance display missing')
 if (!source.includes('dragSessionId') || !source.includes('onDropCapture')) failures.push('board-level drag tracking missing')
 if (!source.includes("type: 'file', receiptId")) failures.push('inline reply does not send uploaded attachments')
 if (order[0] !== 'Investigate p99 latency') failures.push(`pinned task should sort first, got ${order[0]}`)
+if (order[1] !== 'Refactor auth middleware' || order[2] !== 'Security ticket triage' || order[3] !== 'Draft release notes') {
+  failures.push(`expected in progress → done → to decide, got ${order.join(' | ')}`)
+}
+if (!source.includes('const STATUS_RANK = { doing: 0, done: 1, todo: 2 }')) failures.push('status ranking does not put done before to decide')
+if (!source.includes('.dshtb-state[data-status=done] .dshtb-stateDot{background:var(--dsw-alias-state-error-primary)')) failures.push('done status dot is not red')
 if (!boardHtml.includes('dshtb-cardWrap')) failures.push('resizable card wrapper missing')
 if (!boardHtml.includes('dshtb-resize')) failures.push('card resize handle missing')
 if (!boardHtml.includes('dshtb-open')) failures.push('open-session button missing')
